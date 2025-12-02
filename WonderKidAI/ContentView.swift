@@ -13,8 +13,14 @@ struct ContentView: View {
     @State private var isPlaying: Bool = false
     @State private var userSpokenText: String = ""
     
-    // 連線狀態
+    // 任務管理 (用於取消)
+    @State private var currentTask: Task<Void, Never>?
+    
+    // 連線狀態 (nil = 檢查中, true = 成功, false = 失敗)
     @State private var isServerConnected: Bool? = nil
+    
+    // 歷史紀錄頁面控制
+    @State private var showHistory: Bool = false
     
     // 播放與文字進度
     @State private var audioPlayer: AVAudioPlayer?
@@ -40,29 +46,50 @@ struct ContentView: View {
                     .clipped()
                     .ignoresSafeArea()
                     .opacity(0.3)
-                
+               
                 LinearGradient(
                     gradient: Gradient(colors: [Color.white.opacity(0.85), Color.SoftBlue.opacity(0.6)]),
                     startPoint: .top,
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
-                // MARK: - 2. 前景內容層
+               
+                // MARK: - 2. 前景內容層 (主畫面)
                 VStack(spacing: 0) {
-                    
+                   
                     // --- A. 頂部導覽列 ---
                     HStack {
+                        // 1. 成長足跡按鈕 (左上角)
+                        Button(action: {
+                            showHistory = true
+                        }) {
+                            VStack(spacing: 2) {
+                                Image(systemName: "clock.arrow.circlepath")
+                                    .font(.system(size: 18))
+                                Text(selectedLanguage == .chinese ? "足跡" : "History")
+                                    .font(.system(size: 10, weight: .bold))
+                            }
+                            .padding(8)
+                            .background(Color.white.opacity(0.9))
+                            .foregroundColor(.MagicBlue)
+                            .clipShape(Circle())
+                            .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                        }
+                        
+                        Spacer()
+                        
+                        // 2. 連線狀態 (中間偏左)
                         Button(action: {
                             let generator = UIImpactFeedbackGenerator(style: .light)
                             generator.impactOccurred()
+                            withAnimation { isServerConnected = nil }
                             checkServerStatus()
                         }) {
                             HStack(spacing: 6) {
                                 Image(systemName: isServerConnected == true ? "person.wave.2.fill" : (isServerConnected == false ? "moon.zzz.fill" : "antenna.radiowaves.left.and.right"))
                                     .font(.system(size: 14))
                                     .foregroundColor(isServerConnected == true ? .green : (isServerConnected == false ? .gray : .orange))
-                                
+                               
                                 Text(statusText)
                                     .font(.system(size: 14, weight: .bold, design: .rounded))
                                     .foregroundColor(isServerConnected == true ? .DarkText : .gray)
@@ -73,9 +100,10 @@ struct ContentView: View {
                             .cornerRadius(20)
                             .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
                         }
-                        
+                       
                         Spacer()
-                        
+                       
+                        // 3. 語言切換 (右上角)
                         HStack(spacing: 0) {
                             LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
                                 switchLanguage(to: .chinese)
@@ -90,16 +118,16 @@ struct ContentView: View {
                     }
                     .padding(.horizontal, 20)
                     .padding(.top, 10)
-                    
+                   
                     Spacer()
-                    
+                   
                     // --- B. 中間視覺區 ---
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.85))
                             .frame(width: geometry.size.width * 0.45, height: geometry.size.width * 0.45)
                             .shadow(color: Color.white.opacity(0.6), radius: 20)
-                        
+                       
                         Circle()
                             .trim(from: 0, to: 0.7)
                             .stroke(LinearGradient(gradient: Gradient(colors: [.purple, .blue]), startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: 8, lineCap: .round))
@@ -107,14 +135,14 @@ struct ContentView: View {
                             .rotationEffect(Angle(degrees: isThinking ? 360 : 0))
                             .animation(isThinking ? Animation.linear(duration: 1.0).repeatForever(autoreverses: false) : .default, value: isThinking)
                             .opacity(isThinking ? 1 : 0)
-                        
+                       
                         Circle()
                             .stroke(Color.ButtonRed.opacity(0.5), lineWidth: 8)
                             .frame(width: geometry.size.width * 0.4, height: geometry.size.width * 0.4)
                             .scaleEffect(isRecording ? 1.1 : 1.0)
                             .opacity(isRecording ? 1 : 0)
                             .animation(isRecording ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isRecording)
-                        
+                       
                         Image(systemName: isThinking ? "book.fill" : (isRecording ? "waveform.circle.fill" : "book.closed.fill"))
                             .resizable()
                             .scaledToFit()
@@ -123,12 +151,12 @@ struct ContentView: View {
                             .shadow(radius: 5)
                     }
                     .padding(.vertical, 10)
-                    
+                   
                     Spacer()
-                    
-                    // --- C. 底部區 (重點修改) ---
+                   
+                    // --- C. 底部區 ---
                     VStack(spacing: 20) {
-                        
+                       
                         // 1. 字幕框
                         ZStack(alignment: .bottom) {
                             ScrollViewReader { proxy in
@@ -169,7 +197,7 @@ struct ContentView: View {
                                             }
                                             .padding()
                                         } else {
-                                            // 🇺🇸 英文模式：卡片式列表 (Story Cards)
+                                            // 🇺🇸 英文模式
                                             VStack(spacing: 12) {
                                                 ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
                                                     let isActive = (index == currentSentenceIndex)
@@ -183,22 +211,19 @@ struct ContentView: View {
                                                         .background(isActive ? Color.white : Color.white.opacity(0.5))
                                                         .cornerRadius(16)
                                                         .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
-                                                        .scaleEffect(isActive ? 1.02 : 1.0) // 唸到的卡片稍微放大
+                                                        .scaleEffect(isActive ? 1.02 : 1.0)
                                                         .animation(.spring(), value: isActive)
                                                         .id("Sentence-\(index)")
                                                         .onTapGesture {
-                                                            // 小朋友手動點擊卡片時
                                                             isUserScrolling = true
                                                         }
                                                 }
                                             }
                                             .padding()
-                                            // 預留底部空間，讓最後一張卡片能被完整看到
                                             .padding(.bottom, 40)
                                         }
                                     }
                                 }
-                                // 偵測手指滑動
                                 .simultaneousGesture(DragGesture().onChanged { _ in
                                     isUserScrolling = true
                                 })
@@ -208,7 +233,6 @@ struct ContentView: View {
                                     }
                                 }
                                 .onChange(of: currentSentenceIndex) { _, newIndex in
-                                    // 英文：只有當不是手動滑動時，才自動聚焦
                                     if selectedLanguage == .english && !isUserScrolling {
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
@@ -219,9 +243,7 @@ struct ContentView: View {
                                     if isRecording { withAnimation { proxy.scrollTo("UserText", anchor: .bottom) } }
                                 }
                             }
-                            
-                            // 🔥 滑動提示 (Scroll Hint)
-                            // 如果是英文版、文章較長、且還沒捲到底，顯示這個可愛的跳動箭頭
+                           
                             if selectedLanguage == .english && englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
                                 VStack {
                                     Spacer()
@@ -229,15 +251,14 @@ struct ContentView: View {
                                         .font(.system(size: 24))
                                         .foregroundColor(.MagicBlue.opacity(0.6))
                                         .padding(.bottom, 10)
-                                        .opacity(isPlaying ? 0 : 1) // 播放時隱藏，暫停閱讀時顯示
+                                        .opacity(isPlaying ? 0 : 1)
                                 }
                                 .transition(.opacity)
                             }
-                            
-                            // 🔥 找回進度按鈕 (當小朋友自己滑走時顯示)
+                           
                             if isUserScrolling && isPlaying {
                                 Button(action: {
-                                    isUserScrolling = false // 點擊後恢復自動追蹤
+                                    isUserScrolling = false
                                 }) {
                                     HStack(spacing: 4) {
                                         Image(systemName: "location.fill")
@@ -254,12 +275,12 @@ struct ContentView: View {
                             }
                         }
                         .frame(height: geometry.size.height * 0.33)
-                        .background(Color.white.opacity(0.8)) // 背景稍微透明一點，讓卡片更明顯
+                        .background(Color.white.opacity(0.95))
                         .cornerRadius(25)
                         .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
                         .padding(.horizontal, 24)
-                        
-                        // 2. 按鈕區
+                       
+                        // 2. 按鈕區 (只有麥克風與取消，無相機)
                         ZStack {
                             if isPlaying {
                                 HStack {
@@ -275,25 +296,35 @@ struct ContentView: View {
                                     Spacer()
                                 }
                             }
-                            
+                           
+                            // 主按鈕
                             Button(action: {
-                                if isRecording { manualStop() } else { startListening() }
+                                if isThinking {
+                                    cancelThinking() // 思考中 -> 取消
+                                } else if isRecording {
+                                    manualStop() // 錄音中 -> 停止
+                                } else {
+                                    startListening() // 閒置 -> 錄音
+                                }
                             }) {
                                 ZStack {
                                     Circle()
-                                        .fill(LinearGradient(gradient: Gradient(colors: isThinking ? [Color.gray] : [Color.ButtonOrange, Color.ButtonRed]), startPoint: .topLeading, endPoint: .bottomTrailing))
+                                        .fill(LinearGradient(gradient: Gradient(colors: isThinking ? [Color.ButtonRed] : (isRecording ? [Color.ButtonRed] : [Color.ButtonOrange, Color.ButtonRed])), startPoint: .topLeading, endPoint: .bottomTrailing))
                                         .frame(width: 80, height: 80)
-                                        .shadow(color: isThinking ? Color.gray.opacity(0.4) : Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
+                                        .shadow(color: (isThinking || isRecording) ? Color.ButtonRed.opacity(0.4) : Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
                                         .scaleEffect(isRecording ? 1.1 : 1.0)
-                                    
-                                    Image(systemName: isThinking ? "ellipsis" : (isRecording ? "square.fill" : "mic.fill"))
+                                   
+                                    // 思考中顯示 X，其他顯示麥克風
+                                    Image(systemName: isThinking ? "xmark" : (isRecording ? "square.fill" : "mic.fill"))
                                         .font(.system(size: 30))
                                         .foregroundColor(.white)
                                         .animation(.spring(), value: isRecording)
+                                        .animation(.spring(), value: isThinking)
                                 }
                             }
-                            .disabled(isThinking || isPreparingRecording)
-                            
+                            .disabled(isPreparingRecording)
+                            // ⚠️ 移除了長按相機功能
+                           
                             if !isRecording && !isThinking && !isPreparingRecording && aiResponse.count > 20 && !isPlaying {
                                 HStack {
                                     Spacer()
@@ -310,18 +341,31 @@ struct ContentView: View {
                             }
                         }
                         .animation(.spring(), value: isPlaying)
-                        
+                       
                         Text(hintText)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(.gray.opacity(0.9))
-                        
+                       
+                        // 4. 資料來源
                         Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
-                            .font(.system(size: 11, weight: .medium))
-                            .foregroundColor(.gray)
+                            .font(.system(size: 12, weight: .bold))
+                            .foregroundColor(.red.opacity(0.8))
                             .padding(.bottom, 60)
                     }
                     .padding(.bottom, 10)
                 }
+                .blur(radius: isServerConnected == nil ? 5 : 0)
+               
+                // MARK: - 3. 彈出視窗層
+                if isServerConnected == nil {
+                    LoadingCoverView()
+                        .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+                        .zIndex(100)
+                }
+            }
+            // 彈出歷史紀錄
+            .sheet(isPresented: $showHistory) {
+                HistoryView(isPresented: $showHistory, language: selectedLanguage)
             }
         }
         .onAppear {
@@ -337,7 +381,6 @@ struct ContentView: View {
         if selectedLanguage == .chinese {
             characterData = aiResponse.toBopomofoCharacter()
         } else {
-            // 英文斷句邏輯：用標點符號切割，保留完整句子結構
             let rawSentences = aiResponse
                 .replacingOccurrences(of: ". ", with: ".|")
                 .replacingOccurrences(of: "? ", with: "?|")
@@ -351,7 +394,7 @@ struct ContentView: View {
     func calculateCurrentSentence(charIndex: Int) {
         var count = 0
         for (index, sentence) in englishSentences.enumerated() {
-            count += sentence.count + 1 // +1 是因為原本有空格
+            count += sentence.count + 1
             if count >= charIndex {
                 if currentSentenceIndex != index {
                     currentSentenceIndex = index
@@ -368,12 +411,23 @@ struct ContentView: View {
         startListening()
     }
     
+    // 取消 AI 任務
+    func cancelThinking() {
+        print("🛑 使用者手動取消思考")
+        currentTask?.cancel()
+        isThinking = false
+        aiResponse = selectedLanguage == .chinese ? "好喔！那我先暫停～" : "Okay! Cancelled."
+        updateContentData()
+        let generator = UIImpactFeedbackGenerator(style: .medium)
+        generator.impactOccurred()
+    }
+    
     func askExplainAgain() {
         let prompt = selectedLanguage == .chinese ?
             "請用更簡單、更生動的比喻，再解釋一次剛剛的內容，就像講故事給 5 歲小朋友聽一樣。" :
             "Please explain that again in a much simpler way, use analogies, like telling a story to a 5-year-old."
         userSpokenText = selectedLanguage == .chinese ? "🔄 老師，可以講簡單一點嗎？" : "🔄 Teacher, simpler please?"
-        Task { await sendToAI(question: prompt) }
+        sendToAI(question: prompt)
     }
     
     func switchLanguage(to lang: AppLanguage) {
@@ -406,6 +460,9 @@ struct ContentView: View {
         if isPlaying {
             return selectedLanguage == .chinese ? "點紅色手手可以打斷老師喔！" : "Tap the red hand to interrupt!"
         }
+        if isThinking {
+            return selectedLanguage == .chinese ? "點一下取消" : "Tap to cancel"
+        }
         if selectedLanguage == .chinese {
             return isPreparingRecording ? "準備中..." : (isRecording ? "安安老師在聽囉..." : "點一下，開始說話")
         } else {
@@ -414,7 +471,6 @@ struct ContentView: View {
     }
     
     func checkServerStatus() {
-        isServerConnected = nil
         Task {
             let result = await OpenAIService.shared.checkConnection()
             await MainActor.run { withAnimation { isServerConnected = result } }
@@ -469,30 +525,58 @@ struct ContentView: View {
             userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
             return
         }
-        Task { await sendToAI(question: userSpokenText) }
+        sendToAI(question: userSpokenText)
     }
     
-    func sendToAI(question: String) async {
+    // 🔥 一般問答
+    func sendToAI(question: String) {
+        currentTask?.cancel()
         isThinking = true
-        do {
-            let answer = try await OpenAIService.shared.processMessage(
-                userMessage: question,
-                language: selectedLanguage
-            )
-            await MainActor.run {
-                aiResponse = answer
-                currentWordIndex = 0
-                currentSentenceIndex = 0
-                isUserScrolling = false
-                updateContentData()
-            }
-            let audioData = try await OpenAIService.shared.generateAudio(from: answer)
-            await playAudio(data: audioData, textToRead: answer)
-        } catch {
-            await MainActor.run {
-                aiResponse = selectedLanguage == .chinese ? "❌ 連線錯誤: \(error.localizedDescription)" : "❌ Connection Error"
-                isThinking = false
-                updateContentData()
+        
+        currentTask = Task {
+            do {
+                if Task.isCancelled { return }
+                
+                let answer = try await OpenAIService.shared.processMessage(
+                    userMessage: question,
+                    language: selectedLanguage
+                )
+                
+                if Task.isCancelled { return }
+
+                await MainActor.run {
+                    // 💾 紀錄成長足跡 (HistoryManager)
+                    HistoryManager.shared.addRecord(
+                        question: question,
+                        answer: answer,
+                        language: selectedLanguage == .chinese ? "zh-TW" : "en-US"
+                    )
+                    
+                    aiResponse = answer
+                    currentWordIndex = 0
+                    currentSentenceIndex = 0
+                    isUserScrolling = false
+                    updateContentData()
+                }
+                
+                if Task.isCancelled { return }
+                
+                let audioData = try await OpenAIService.shared.generateAudio(from: answer)
+                
+                if Task.isCancelled { return }
+                
+                await playAudio(data: audioData, textToRead: answer)
+                
+            } catch {
+                if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
+                    print("🚫 任務已取消，不顯示錯誤")
+                } else {
+                    await MainActor.run {
+                        aiResponse = selectedLanguage == .chinese ? "❌ 連線錯誤: \(error.localizedDescription)" : "❌ Connection Error"
+                        isThinking = false
+                        updateContentData()
+                    }
+                }
             }
         }
     }
@@ -519,12 +603,12 @@ struct ContentView: View {
                     timer.invalidate()
                     return
                 }
-                
+               
                 if player.isPlaying {
                     let percentage = player.currentTime / player.duration
                     let charIndex = Int(Double(totalChars) * percentage)
                     self.currentWordIndex = min(charIndex, totalChars)
-                    
+                   
                     if self.selectedLanguage == .english {
                         calculateCurrentSentence(charIndex: charIndex)
                     }
@@ -549,7 +633,53 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 輔助元件 (無需變動)
+// MARK: - 3. 載入遮罩視圖
+struct LoadingCoverView: View {
+    @State private var isRotating = false
+    
+    var body: some View {
+        ZStack {
+            Image("KnowledgeBackground")
+                .resizable()
+                .scaledToFill()
+                .ignoresSafeArea()
+                .opacity(0.3)
+           
+            LinearGradient(
+                gradient: Gradient(colors: [Color.white.opacity(0.95), Color.SoftBlue.opacity(0.8)]),
+                startPoint: .top,
+                endPoint: .bottom
+            )
+            .ignoresSafeArea()
+           
+            VStack(spacing: 30) {
+                Image(systemName: "book.circle.fill")
+                    .font(.system(size: 90))
+                    .foregroundColor(.MagicBlue)
+                    .rotationEffect(Angle(degrees: isRotating ? 360 : 0))
+                    .animation(Animation.linear(duration: 3.0).repeatForever(autoreverses: false), value: isRotating)
+                    .onAppear { isRotating = true }
+                    .shadow(color: .MagicBlue.opacity(0.3), radius: 10)
+               
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: .MagicBlue))
+                    .scaleEffect(1.8)
+               
+                VStack(spacing: 10) {
+                    Text("安安老師準備中...")
+                        .font(.system(size: 22, weight: .bold, design: .rounded))
+                        .foregroundColor(.DarkText)
+                   
+                    Text("正在連接神奇魔法書櫃 📖")
+                        .font(.system(size: 16, weight: .medium, design: .rounded))
+                        .foregroundColor(.gray)
+                }
+            }
+        }
+    }
+}
+
+// MARK: - 輔助元件
 struct ThinkingAnimationView: View {
     let language: AppLanguage
     @State private var isAnimating = false

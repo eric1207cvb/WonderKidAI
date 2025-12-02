@@ -1,5 +1,6 @@
 import Foundation
 
+// MARK: - 定義錯誤與語言
 enum AppLanguage: String {
     case chinese = "zh-TW"
     case english = "en-US"
@@ -19,13 +20,55 @@ enum OpenAIError: Error, LocalizedError {
 }
 
 class OpenAIService {
-    // ✅ 確保這裡是你的 Render 網址
+    
+    // 👇👇👇 【請在這裡修改網址】 👇👇👇
+    
+    // 選項 1：本機測試 (電腦跑 node server.js 時用這個)
+    // ⚠️ 請把 192.168.0.123 換成你電腦的實際 IP
+    // ⚠️ 你的 Server 現在是 8080 port，記得要加 :8080
+    // private let baseURL = "http://192.168.0.123:8080"
+    
+    // 選項 2：正式環境 (Render)
+    // ✅ 如果你已經把新的 server.js (有 /health 的版本) 推上 Render，就用這個
     private let baseURL = "https://wonderkidai-server.onrender.com"
+    
+    // 👆👆👆 ----------------------- 👆👆👆
     
     static let shared = OpenAIService()
     private init() {}
     
-    // MARK: - 1. 定義工具
+    // MARK: - 5. 連線檢查 (前端修正版)
+        func checkConnection() async -> Bool {
+            // 修改 1: 不檢查 /health，改檢查根目錄 / (這樣比較通用)
+            guard let url = URL(string: baseURL) else { return false }
+            
+            var request = URLRequest(url: url)
+            request.httpMethod = "GET"
+            request.timeoutInterval = 5
+            
+            do {
+                print("📡 正在連線: \(url.absoluteString)...")
+                let (_, response) = try await URLSession.shared.data(for: request)
+                
+                if let httpResponse = response as? HTTPURLResponse {
+                    print("📥 伺服器回應代碼: \(httpResponse.statusCode)")
+                    
+                    // 修改 2: 【關鍵！】
+                    // 只要伺服器有回應 (200 代表有網頁，404 代表沒網頁但伺服器活著)
+                    // 我們都視為「連線成功」，讓安安老師變綠燈 ✅
+                    if httpResponse.statusCode == 200 || httpResponse.statusCode == 404 {
+                        print("✅ 判定連線成功 (Server is alive)")
+                        return true
+                    }
+                }
+                return false
+            } catch {
+                print("❌ 連線真正失敗 (網路不通或伺服器沒開): \(error.localizedDescription)")
+                return false
+            }
+        }
+
+    // MARK: - 1. 定義工具 (維持不變)
     private var tools: [[String: Any]] {
         return [
             [
@@ -48,49 +91,39 @@ class OpenAIService {
         ]
     }
 
-    // MARK: - 2. 核心處理邏輯
+    // MARK: - 2. 核心處理邏輯 (聊天)
     func processMessage(userMessage: String, language: AppLanguage, history: [[String: Any]] = []) async throws -> String {
         
+        // 配合 server.js 的路徑 /api/chat
         guard let url = URL(string: "\(baseURL)/api/chat") else { throw OpenAIError.invalidURL }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // 🔥 關鍵修改：雙語人設切換
+        // 雙語人設
         let systemPromptText = language == .chinese ?
                     """
                     【最高指令】
                     1. 你是「安安老師」，一本活潑的「數位百科全書」，對象是 4-10 歲幼童。
                     2. **核心任務**：你的目標是激發好奇心，涵蓋以下領域：
                        - 🌿 **自然**：介紹動植物生態。
-                       - 🔢 **數學**：用生活例子解釋數字與邏輯（不要只給答案）。
+                       - 🔢 **數學**：用生活例子解釋數字與邏輯。
                        - 🌍 **地理**：介紹國家、風景與文化。
                        - 🪐 **天文**：講述宇宙、星星與太空船。
                        - 📖 **語文**：教導成語、單字由來或說故事。
                        - 📜 **歷史**：把歷史人物當作故事主角來講。
                        - 🎒 **日常生活**：教導生活常識、禮貌與安全。
-                    3. **語氣要求**：
-                       - 像幼兒園老師一樣溫柔、穩定、親切。
-                       - 解釋要簡單（ELI5），多用比喻（例如：地球像一顆藍色的彈珠）。
-                    4. **互動引導**：
-                       - 如果小朋友只說「你好」，請主動拋出這七大領域的有趣話題來吸引他。
-                       - 例如：「你好呀！你想聽聽恐龍的故事，還是想知道為什麼星星會發光？」
+                    3. **語氣要求**：像幼兒園老師一樣溫柔、穩定、親切。解釋要簡單（ELI5）。
+                    4. **互動引導**：如果小朋友只說「你好」，請主動拋出這七大領域的有趣話題。
                     5. **安全守則**：嚴禁暴力、色情。
                     """ :
                     """
                     [Instructions]
                     1. You are "Teacher An-An", a digital encyclopedia for children (4-10 yo).
-                    2. **Core Subjects**:
-                       - 🌿 **Nature**: Plants and animals.
-                       - 🔢 **Math**: Logic and numbers (explain steps, don't just solve).
-                       - 🌍 **Geography**: Countries and cultures.
-                       - 🪐 **Astronomy**: Space, stars, and planets.
-                       - 📖 **Language**: Stories and vocabulary.
-                       - 📜 **History**: Historical figures as story characters.
-                       - 🎒 **Daily Life**: Safety and manners.
+                    2. **Core Subjects**: Nature, Math, Geography, Astronomy, Language, History, Daily Life.
                     3. **Tone**: Gentle, patient, enthusiastic. Use simple analogies.
-                    4. **Engagement**: If the user is silent or just says "Hi", suggest a topic from the list above.
+                    4. **Engagement**: If user says "Hi", suggest a topic.
                     5. **Safety**: Strictly safe content only.
                     """
         
@@ -120,7 +153,7 @@ class OpenAIService {
         guard let choice = result.choices.first else { throw OpenAIError.noData }
         let message = choice.message
         
-        // 處理工具呼叫
+        // 處理工具呼叫 (查維基)
         if let toolCalls = message.tool_calls, !toolCalls.isEmpty {
             print("🤖 安安老師決定查維基百科...")
             var newHistory = messages
@@ -151,7 +184,6 @@ class OpenAIService {
     // MARK: - 3. 維基百科 API
     private func fetchWikipedia(query: String, language: AppLanguage) async -> String {
         print("🌍 正在查詢維基百科: \(query)")
-        // 自動切換中文/英文維基百科
         let langCode = (language == .chinese) ? "zh" : "en"
         
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
@@ -163,7 +195,7 @@ class OpenAIService {
                let pagesDict = queryDict["pages"] as? [String: Any],
                let firstPage = pagesDict.values.first as? [String: Any],
                let extract = firstPage["extract"] as? String {
-                return String(extract.prefix(800)) // 英文可以多讀一點
+                return String(extract.prefix(800))
             }
             return (language == .chinese) ? "找不到資料" : "No information found."
         } catch { return "Network Error" }
@@ -171,6 +203,7 @@ class OpenAIService {
     
     // MARK: - 4. 嘴巴 (TTS)
     func generateAudio(from text: String) async throws -> Data {
+        // 配合 server.js 的路徑 /api/speech
         guard let url = URL(string: "\(baseURL)/api/speech") else { throw OpenAIError.invalidURL }
         
         var request = URLRequest(url: url)
@@ -195,27 +228,10 @@ class OpenAIService {
         return data
     }
     
-    // MARK: - 5. 連線檢查
-    func checkConnection() async -> Bool {
-        guard let url = URL(string: baseURL) else { return false }
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 3
-        
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 {
-                return true
-            }
-            return false
-        } catch {
-            print("❌ 連線檢查失敗: \(error.localizedDescription)")
-            return false
-        }
-    }
+    // (已移除 analyzeFoodImage，因為你說不需要了)
 }
 
-// 輔助結構
+// MARK: - 輔助結構
 struct ChatResponse: Decodable { struct Choice: Decodable { let message: ChatMessage }; let choices: [Choice] }
 struct ChatMessage: Decodable { let role: String; let content: String?; let tool_calls: [ToolCall]?; func toDictionary() -> [String: Any] { var dict: [String: Any] = ["role": role]; if let content = content { dict["content"] = content }; if let tool_calls = tool_calls { dict["tool_calls"] = tool_calls.map { $0.toDictionary() } }; return dict } }
 struct ToolCall: Decodable { let id: String; let type: String; let function: FunctionCall; func toDictionary() -> [String: Any] { return ["id": id, "type": type, "function": ["name": function.name, "arguments": function.arguments]] } }
