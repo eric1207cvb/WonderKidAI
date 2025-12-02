@@ -19,7 +19,7 @@ enum OpenAIError: Error, LocalizedError {
 }
 
 class OpenAIService {
-    // ✅ 你的 Mac IP
+    // ✅ 確保這裡是你的 Render 網址
     private let baseURL = "https://wonderkidai-server.onrender.com"
     
     static let shared = OpenAIService()
@@ -32,13 +32,13 @@ class OpenAIService {
                 "type": "function",
                 "function": [
                     "name": "search_wikipedia",
-                    "description": "當使用者詢問具體知識（如：動物、植物、歷史人物、科學現象、物品）時使用。",
+                    "description": "Used when the user asks for specific knowledge (animals, plants, history, science, objects).",
                     "parameters": [
                         "type": "object",
                         "properties": [
                             "query": [
                                 "type": "string",
-                                "description": "關鍵字"
+                                "description": "Keywords for search"
                             ]
                         ],
                         "required": ["query"]
@@ -57,7 +57,7 @@ class OpenAIService {
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // 人設：溫柔、穩定、親切
+        // 🔥 關鍵修改：雙語人設切換
         let systemPromptText = language == .chinese ?
             """
             【最高指令】
@@ -70,7 +70,14 @@ class OpenAIService {
             4. **內容要求**：把複雜的知識簡化成小朋友聽得懂的話。限制在 100 字以內。
             5. **安全守則**：嚴禁暴力、色情，遇到請溫柔轉移話題。
             """ :
-            "You are Teacher An-An. Strictly use Traditional Chinese (Taiwan). Speak warmly, patiently, and clearly like a professional kindergarten teacher. Keep it simple and safe."
+            """
+            [Instructions]
+            1. You are "Teacher An-An", an AI encyclopedia for children aged 4-10.
+            2. **Language**: Strictly use **English (US)**.
+            3. **Tone**: Gentle, patient, enthusiastic, and encouraging (like a professional American kindergarten teacher).
+            4. **Content**: Explain complex topics in very simple words (ELI5 - Explain Like I'm 5). Use analogies. Keep answers under 80 words.
+            5. **Safety**: Strictly NO violence or inappropriate content. Redirect gently if asked.
+            """
         
         var messages = history
         if messages.isEmpty {
@@ -129,9 +136,11 @@ class OpenAIService {
     // MARK: - 3. 維基百科 API
     private func fetchWikipedia(query: String, language: AppLanguage) async -> String {
         print("🌍 正在查詢維基百科: \(query)")
+        // 自動切換中文/英文維基百科
         let langCode = (language == .chinese) ? "zh" : "en"
+        
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
-              let url = URL(string: "https://\(langCode).wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&explaintext=true&redirects=1&titles=\(encodedQuery)") else { return "查詢網址錯誤" }
+              let url = URL(string: "https://\(langCode).wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&explaintext=true&redirects=1&titles=\(encodedQuery)") else { return "Query Error" }
         do {
             let (data, _) = try await URLSession.shared.data(from: url)
             if let json = try JSONSerialization.jsonObject(with: data) as? [String: Any],
@@ -139,10 +148,10 @@ class OpenAIService {
                let pagesDict = queryDict["pages"] as? [String: Any],
                let firstPage = pagesDict.values.first as? [String: Any],
                let extract = firstPage["extract"] as? String {
-                return String(extract.prefix(500))
+                return String(extract.prefix(800)) // 英文可以多讀一點
             }
-            return "找不到資料"
-        } catch { return "網路錯誤" }
+            return (language == .chinese) ? "找不到資料" : "No information found."
+        } catch { return "Network Error" }
     }
     
     // MARK: - 4. 嘴巴 (TTS)
@@ -171,13 +180,12 @@ class OpenAIService {
         return data
     }
     
-    // MARK: - 5. 連線檢查 (Health Check)
+    // MARK: - 5. 連線檢查
     func checkConnection() async -> Bool {
         guard let url = URL(string: baseURL) else { return false }
-        
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
-        request.timeoutInterval = 3 // 設定 3 秒超時
+        request.timeoutInterval = 3
         
         do {
             let (_, response) = try await URLSession.shared.data(for: request)
@@ -192,7 +200,7 @@ class OpenAIService {
     }
 }
 
-// ... (結構維持不變) ...
+// 輔助結構
 struct ChatResponse: Decodable { struct Choice: Decodable { let message: ChatMessage }; let choices: [Choice] }
 struct ChatMessage: Decodable { let role: String; let content: String?; let tool_calls: [ToolCall]?; func toDictionary() -> [String: Any] { var dict: [String: Any] = ["role": role]; if let content = content { dict["content"] = content }; if let tool_calls = tool_calls { dict["tool_calls"] = tool_calls.map { $0.toDictionary() } }; return dict } }
 struct ToolCall: Decodable { let id: String; let type: String; let function: FunctionCall; func toDictionary() -> [String: Any] { return ["id": id, "type": type, "function": ["name": function.name, "arguments": function.arguments]] } }

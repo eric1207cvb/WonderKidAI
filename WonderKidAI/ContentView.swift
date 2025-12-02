@@ -12,13 +12,16 @@ struct ContentView: View {
     @State private var isThinking: Bool = false
     @State private var userSpokenText: String = ""
     
-    // 連線狀態 (nil=檢查中, true=成功, false=失敗)
+    // 連線狀態
     @State private var isServerConnected: Bool? = nil
     
     @State private var audioPlayer: AVAudioPlayer?
     @State private var textTimer: Timer?
     @State private var currentWordIndex: Int = 0
     @State private var characterData: [(char: String, bopomofo: String)] = []
+    
+    // 🔥 定義這個可愛的 AI 符號，方便管理
+    let aiListeningSymbol = "✨🤖✨"
     
     var body: some View {
         ZStack {
@@ -32,20 +35,17 @@ struct ContentView: View {
             VStack(spacing: 0) {
                 // --- 頂部導覽列 ---
                 HStack {
-                    // ✅ 修改：可愛版連線狀態膠囊
+                    // 連線狀態膠囊
                     Button(action: {
-                        // 點擊可以手動喚醒/重新檢查
                         let generator = UIImpactFeedbackGenerator(style: .light)
                         generator.impactOccurred()
                         checkServerStatus()
                     }) {
                         HStack(spacing: 6) {
-                            // 動態圖示
                             Image(systemName: isServerConnected == true ? "person.wave.2.fill" : (isServerConnected == false ? "moon.zzz.fill" : "antenna.radiowaves.left.and.right"))
                                 .font(.system(size: 14))
                                 .foregroundColor(isServerConnected == true ? .green : (isServerConnected == false ? .gray : .orange))
                             
-                            // 擬人化文字
                             Text(statusText)
                                 .font(.system(size: 14, weight: .bold, design: .rounded))
                                 .foregroundColor(isServerConnected == true ? .DarkText : .gray)
@@ -62,10 +62,10 @@ struct ContentView: View {
                     // 語言切換按鈕
                     HStack(spacing: 0) {
                         LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
-                            selectedLanguage = .chinese
+                            switchLanguage(to: .chinese)
                         }
                         LanguageButton(title: "En", isSelected: selectedLanguage == .english) {
-                            selectedLanguage = .english
+                            switchLanguage(to: .english)
                         }
                     }
                     .background(Color.white)
@@ -84,7 +84,7 @@ struct ContentView: View {
                         .frame(width: 160, height: 160)
                         .shadow(color: Color.white.opacity(0.5), radius: 20)
                     
-                    // 思考光環 (轉圈圈)
+                    // 思考光環
                     Circle()
                         .trim(from: 0, to: 0.7)
                         .stroke(LinearGradient(gradient: Gradient(colors: [.purple, .blue]), startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: 8, lineCap: .round))
@@ -93,7 +93,7 @@ struct ContentView: View {
                         .animation(isThinking ? Animation.linear(duration: 1.0).repeatForever(autoreverses: false) : .default, value: isThinking)
                         .opacity(isThinking ? 1 : 0)
                     
-                    // 聆聽光環 (放大縮小)
+                    // 聆聽光環
                     Circle()
                         .stroke(Color.ButtonRed.opacity(0.5), lineWidth: 8)
                         .frame(width: 140, height: 140)
@@ -101,8 +101,8 @@ struct ContentView: View {
                         .opacity(isRecording ? 1 : 0)
                         .animation(isRecording ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isRecording)
                     
-                    // 中央圖示
-                    Image(systemName: isThinking ? "book.fill" : (isRecording ? "mic.circle.fill" : "book.closed.fill"))
+                    // 中央圖示：錄音時變成聲波圖示，更有科技感
+                    Image(systemName: isThinking ? "book.fill" : (isRecording ? "waveform.circle.fill" : "book.closed.fill"))
                         .resizable()
                         .scaledToFit()
                         .frame(width: 70, height: 70)
@@ -117,51 +117,64 @@ struct ContentView: View {
                     // 📝 字幕區
                     ScrollViewReader { proxy in
                         ScrollView {
-                            // 🅰️ 錄音模式
-                            if isRecording || isPreparingRecording {
+                            // 1. 思考中：顯示跳動動畫
+                            if isThinking {
+                                ThinkingAnimationView(language: selectedLanguage)
+                                    .frame(maxWidth: .infinity, minHeight: 200)
+                            }
+                            // 2. 錄音中：顯示使用者說的話 (或 AI 機器人符號)
+                            else if isRecording || isPreparingRecording {
                                 Text(userSpokenText)
                                     .font(.system(size: 28, weight: .bold, design: .rounded))
                                     .foregroundColor(isPreparingRecording ? .gray : .ButtonRed)
-                                    .multilineTextAlignment(.leading)
+                                    .multilineTextAlignment(.center) // 機器人符號置中比較好看
                                     .lineSpacing(10)
                                     .padding()
-                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .frame(maxWidth: .infinity, alignment: .center)
                                     .id("UserText")
                                 
-                            } else {
-                                // 🅱️ AI 回答模式 (注音方塊)
-                                LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
-                                    ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
-                                        VStack(spacing: 0) {
-                                            if !item.bopomofo.isEmpty {
-                                                Text(item.bopomofo)
-                                                    .font(.system(size: 10, weight: .regular))
-                                                    .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.5))
-                                                    .fixedSize()
+                            }
+                            // 3. 結果展示
+                            else {
+                                if selectedLanguage == .chinese {
+                                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
+                                        ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
+                                            VStack(spacing: 0) {
+                                                if !item.bopomofo.isEmpty {
+                                                    Text(item.bopomofo)
+                                                        .font(.system(size: 10, weight: .regular))
+                                                        .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.5))
+                                                        .fixedSize()
+                                                }
+                                                Text(item.char)
+                                                    .font(.system(size: 26, weight: .bold, design: .rounded))
+                                                    .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.4))
                                             }
-                                            Text(item.char)
-                                                .font(.system(size: 26, weight: .bold, design: .rounded))
-                                                .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.4))
+                                            .id(index)
+                                            .frame(minWidth: 38)
+                                            .scaleEffect(index == currentWordIndex - 1 ? 1.2 : 1.0)
+                                            .animation(.spring(response: 0.3), value: currentWordIndex)
                                         }
-                                        .id(index)
-                                        .frame(minWidth: 38)
-                                        .scaleEffect(index == currentWordIndex - 1 ? 1.2 : 1.0)
-                                        .animation(.spring(response: 0.3), value: currentWordIndex)
                                     }
+                                    .padding()
+                                } else {
+                                    Text(aiResponse)
+                                        .font(.system(size: 24, weight: .medium, design: .rounded))
+                                        .foregroundColor(.MagicBlue)
+                                        .lineSpacing(8)
+                                        .multilineTextAlignment(.leading)
+                                        .padding()
+                                        .frame(maxWidth: .infinity, alignment: .leading)
                                 }
-                                .padding()
                             }
                         }
-                        // iOS 17+ 寫法
                         .onChange(of: currentWordIndex) { _, newIndex in
-                            if newIndex > 0 {
+                            if selectedLanguage == .chinese && newIndex > 0 {
                                 withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
                             }
                         }
                         .onChange(of: userSpokenText) { _, _ in
-                            if isRecording {
-                                withAnimation { proxy.scrollTo("UserText", anchor: .bottom) }
-                            }
+                            if isRecording { withAnimation { proxy.scrollTo("UserText", anchor: .bottom) } }
                         }
                     }
                     .frame(height: 300)
@@ -193,7 +206,7 @@ struct ContentView: View {
                     }
                     .disabled(isThinking || isPreparingRecording)
                     
-                    Text(isPreparingRecording ? "準備中..." : (isRecording ? "安安老師在聽囉..." : "點一下，開始說話"))
+                    Text(hintText)
                         .font(.system(size: 14, weight: .bold, design: .rounded))
                         .foregroundColor(.gray.opacity(0.8))
                 }
@@ -203,41 +216,57 @@ struct ContentView: View {
         .onAppear {
             SpeechService.shared.requestAuthorization()
             characterData = aiResponse.toBopomofoCharacter()
-            checkServerStatus() // 啟動檢查
+            checkServerStatus()
         }
     }
     
-    // MARK: - 輔助邏輯
+    // MARK: - 邏輯區
     
-    // 狀態文字顯示邏輯
+    func switchLanguage(to lang: AppLanguage) {
+        selectedLanguage = lang
+        if lang == .chinese {
+            aiResponse = "嗨！我是安安老師～\n小朋友你想知道什麼呢？"
+        } else {
+            aiResponse = "Hi! I am Teacher An-An.\nWhat would you like to know?"
+        }
+        characterData = aiResponse.toBopomofoCharacter()
+    }
+    
     var statusText: String {
-        switch isServerConnected {
-        case true:
-            return "安安老師上線中"
-        case false:
-            return "老師休息中 (點我叫醒)"
-        default:
-            return "正在找老師..."
+        if selectedLanguage == .chinese {
+            switch isServerConnected {
+            case true: return "安安老師上線中"
+            case false: return "老師休息中 (點我叫醒)"
+            default: return "正在找老師..."
+            }
+        } else {
+            switch isServerConnected {
+            case true: return "Teacher An-An is Online"
+            case false: return "Teacher is Sleeping (Tap)"
+            default: return "Connecting..."
+            }
+        }
+    }
+    
+    var hintText: String {
+        if selectedLanguage == .chinese {
+            return isPreparingRecording ? "準備中..." : (isRecording ? "安安老師在聽囉..." : "點一下，開始說話")
+        } else {
+            return isPreparingRecording ? "Preparing..." : (isRecording ? "I'm listening..." : "Tap to speak")
         }
     }
     
     func checkServerStatus() {
-        isServerConnected = nil // 設定為檢查中(橘色)
+        isServerConnected = nil
         Task {
             let result = await OpenAIService.shared.checkConnection()
-            await MainActor.run {
-                withAnimation {
-                    isServerConnected = result
-                }
-            }
+            await MainActor.run { withAnimation { isServerConnected = result } }
         }
     }
     
     func startListening() {
         guard !isThinking && !isPreparingRecording else { return }
-        
         stopAudio()
-        
         isPreparingRecording = true
         isRecording = false
         userSpokenText = "..."
@@ -246,23 +275,22 @@ struct ContentView: View {
         SpeechService.shared.onRecordingStarted = {
             self.isPreparingRecording = false
             self.isRecording = true
-            self.userSpokenText = "👂"
+            // 🔥 修改：開始錄音時，顯示 AI 機器人符號
+            self.userSpokenText = self.aiListeningSymbol
         }
         
         SpeechService.shared.onSpeechDetected = { text, isFinished in
             if isFinished {
                 self.finishRecording()
             } else {
-                if !text.isEmpty {
-                    self.userSpokenText = text
-                }
+                if !text.isEmpty { self.userSpokenText = text }
             }
         }
         
         do {
             try SpeechService.shared.startRecording(language: selectedLanguage)
         } catch {
-            userSpokenText = "❌ 啟動失敗"
+            userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
             isPreparingRecording = false
             isRecording = false
         }
@@ -281,8 +309,9 @@ struct ContentView: View {
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.impactOccurred()
         
-        if userSpokenText == "👂" || userSpokenText.isEmpty || userSpokenText == "..." {
-            userSpokenText = "🤔 太小聲囉～"
+        // 🔥 修改：檢查如果還是機器人符號，代表沒講話
+        if userSpokenText == aiListeningSymbol || userSpokenText.isEmpty || userSpokenText == "..." {
+            userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
             return
         }
         
@@ -308,7 +337,7 @@ struct ContentView: View {
             
         } catch {
             await MainActor.run {
-                aiResponse = "❌ 連線錯誤: \(error.localizedDescription)"
+                aiResponse = selectedLanguage == .chinese ? "❌ 連線錯誤: \(error.localizedDescription)" : "❌ Connection Error"
                 isThinking = false
             }
         }
@@ -341,7 +370,7 @@ struct ContentView: View {
                 }
             }
         } catch {
-            print("❌ 播放失敗: \(error)")
+            print("❌ Playback failed: \(error)")
             isThinking = false
         }
     }
@@ -353,7 +382,37 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 輔助元件與擴充
+// MARK: - 輔助元件
+
+struct ThinkingAnimationView: View {
+    let language: AppLanguage
+    @State private var isAnimating = false
+    
+    var body: some View {
+        VStack(spacing: 15) {
+            HStack(spacing: 8) {
+                ForEach(0..<3) { index in
+                    Circle()
+                        .fill(Color.MagicBlue.opacity(0.6))
+                        .frame(width: 12, height: 12)
+                        .scaleEffect(isAnimating ? 1.0 : 0.5)
+                        .opacity(isAnimating ? 1.0 : 0.3)
+                        .animation(
+                            Animation.easeInOut(duration: 0.6)
+                                .repeatForever()
+                                .delay(Double(index) * 0.2),
+                            value: isAnimating
+                        )
+                }
+            }
+            Text(language == .chinese ? "安安老師正在翻書找答案..." : "Checking the magic book...")
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundColor(.gray.opacity(0.8))
+        }
+        .onAppear { isAnimating = true }
+    }
+}
+
 struct LanguageButton: View {
     let title: String
     let isSelected: Bool
@@ -394,7 +453,8 @@ extension String {
             CFStringTransform(mutableString, nil, kCFStringTransformMandarinLatin, false)
             CFStringTransform(mutableString, nil, "Latin-Bopomofo" as CFString, false)
             let bopomofo = String(mutableString)
-            result.append((text, bopomofo))
+            let finalBopomofo = (bopomofo == text) ? "" : bopomofo
+            result.append((text, finalBopomofo))
         }
         return result
     }
