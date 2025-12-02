@@ -13,16 +13,14 @@ struct ContentView: View {
     @State private var isPlaying: Bool = false
     @State private var userSpokenText: String = ""
     
-    // 🔥 新增：記住上一個問題 (為了 again 功能)
+    // 記錄上一個問題 (用於 again 功能)
     @State private var lastQuestion: String = ""
     
-    // 任務管理 (用於取消)
+    // 任務管理
     @State private var currentTask: Task<Void, Never>?
     
-    // 連線狀態
+    // 連線與頁面控制
     @State private var isServerConnected: Bool? = nil
-    
-    // 頁面控制
     @State private var showHistory: Bool = false
     @State private var showPrivacy: Bool = false
     @State private var showEULA: Bool = false
@@ -59,12 +57,12 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
                
-                // MARK: - 2. 前景內容層 (主畫面)
+                // MARK: - 2. 前景內容層
                 VStack(spacing: 0) {
                    
                     // --- A. 頂部導覽列 ---
                     HStack {
-                        // 1. 成長足跡按鈕
+                        // 足跡按鈕
                         Button(action: { showHistory = true }) {
                             VStack(spacing: 2) {
                                 Image(systemName: "clock.arrow.circlepath")
@@ -81,7 +79,7 @@ struct ContentView: View {
                         
                         Spacer()
                         
-                        // 2. 連線狀態
+                        // 連線狀態
                         Button(action: {
                             let generator = UIImpactFeedbackGenerator(style: .light)
                             generator.impactOccurred()
@@ -106,7 +104,7 @@ struct ContentView: View {
                        
                         Spacer()
                        
-                        // 3. 語言切換
+                        // 語言切換
                         HStack(spacing: 0) {
                             LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
                                 switchLanguage(to: .chinese)
@@ -303,11 +301,11 @@ struct ContentView: View {
                             // 主按鈕
                             Button(action: {
                                 if isThinking {
-                                    cancelThinking() // 思考中 -> 取消
+                                    cancelThinking()
                                 } else if isRecording {
-                                    manualStop() // 錄音中 -> 停止
+                                    manualStop()
                                 } else {
-                                    startListening() // 閒置 -> 錄音
+                                    startListening()
                                 }
                             }) {
                                 ZStack {
@@ -317,7 +315,6 @@ struct ContentView: View {
                                         .shadow(color: (isThinking || isRecording) ? Color.ButtonRed.opacity(0.4) : Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
                                         .scaleEffect(isRecording ? 1.1 : 1.0)
                                    
-                                    // 思考中顯示 X，其他顯示麥克風
                                     Image(systemName: isThinking ? "xmark" : (isRecording ? "square.fill" : "mic.fill"))
                                         .font(.system(size: 30))
                                         .foregroundColor(.white)
@@ -348,7 +345,7 @@ struct ContentView: View {
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(.gray.opacity(0.9))
                        
-                        // 4. 資料來源與法律條款 (加深顏色 + 抬高位置)
+                        // 4. 資料來源與法律條款
                         VStack(spacing: 10) {
                             Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
                                 .font(.system(size: 12, weight: .bold))
@@ -441,7 +438,6 @@ struct ContentView: View {
     }
     
     func askExplainAgain() {
-        // 確保有上一個問題，如果沒有就預設一個，避免壞掉
         let questionToAsk = lastQuestion.isEmpty ? (selectedLanguage == .chinese ? "這個" : "this") : lastQuestion
         
         let prompt = selectedLanguage == .chinese ?
@@ -500,44 +496,43 @@ struct ContentView: View {
     }
     
     func startListening() {
-            guard !isThinking && !isPreparingRecording else { return }
-            
-            // 🔥 修改：改用 .heavy (重擊) 模式，震動感最強烈
-            let generator = UIImpactFeedbackGenerator(style: .heavy)
-            // 💡 讓震動引擎準備好 (這行可以降低延遲)
-            generator.prepare()
-            generator.impactOccurred()
-            
-            stopAudio()
-            isPreparingRecording = true
-            isRecording = false
-            userSpokenText = "..."
-            currentWordIndex = 0
-            currentSentenceIndex = 0
-            isUserScrolling = false
-            
-            SpeechService.shared.onRecordingStarted = {
-                self.isPreparingRecording = false
-                self.isRecording = true
-                self.userSpokenText = self.aiListeningSymbol
-            }
-            
-            SpeechService.shared.onSpeechDetected = { text, isFinished in
-                if isFinished {
-                    self.finishRecording()
-                } else {
-                    if !text.isEmpty { self.userSpokenText = text }
-                }
-            }
-            
-            do {
-                try SpeechService.shared.startRecording(language: selectedLanguage)
-            } catch {
-                userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
-                isPreparingRecording = false
-                isRecording = false
+        guard !isThinking && !isPreparingRecording else { return }
+        
+        // 🔥 重擊震動
+        let generator = UIImpactFeedbackGenerator(style: .heavy)
+        generator.prepare()
+        generator.impactOccurred()
+        
+        stopAudio()
+        isPreparingRecording = true
+        isRecording = false
+        userSpokenText = "..."
+        currentWordIndex = 0
+        currentSentenceIndex = 0
+        isUserScrolling = false
+        
+        SpeechService.shared.onRecordingStarted = {
+            self.isPreparingRecording = false
+            self.isRecording = true
+            self.userSpokenText = self.aiListeningSymbol
+        }
+        
+        SpeechService.shared.onSpeechDetected = { text, isFinished in
+            if isFinished {
+                self.finishRecording()
+            } else {
+                if !text.isEmpty { self.userSpokenText = text }
             }
         }
+        
+        do {
+            try SpeechService.shared.startRecording(language: selectedLanguage)
+        } catch {
+            userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
+            isPreparingRecording = false
+            isRecording = false
+        }
+    }
     
     func manualStop() {
         SpeechService.shared.stopRecording()
@@ -554,11 +549,12 @@ struct ContentView: View {
             userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
             return
         }
-        // 🔥 紀錄問題
+        // 紀錄問題
         lastQuestion = userSpokenText
         sendToAI(question: userSpokenText)
     }
     
+    // 🔥 一般問答
     func sendToAI(question: String) {
         currentTask?.cancel()
         isThinking = true
@@ -590,7 +586,9 @@ struct ContentView: View {
                 
                 if Task.isCancelled { return }
                 
-                let audioData = try await OpenAIService.shared.generateAudio(from: answer)
+                // 🔥 關鍵修改：使用 cleanForTTS 清洗文字
+                let cleanText = answer.cleanForTTS()
+                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
                 
                 if Task.isCancelled { return }
                 
@@ -755,8 +753,6 @@ struct LanguageButton: View {
     }
 }
 
-// ⚠️ 移除了 ImagePicker 結構 (因為不需要相機了)
-
 extension Color {
     static let CreamWhite = Color(red: 1.0, green: 0.99, blue: 0.96)
     static let SoftBlue = Color(red: 0.92, green: 0.96, blue: 1.0)
@@ -784,5 +780,21 @@ extension String {
             result.append((text, finalBopomofo))
         }
         return result
+    }
+    
+    // 🔥 新增：文字清潔工，讓 TTS 唸得更順
+    func cleanForTTS() -> String {
+        var text = self
+        // 1. 移除 Markdown
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "#", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+        // 2. 移除 Emoji (可選，這裡示範移除)
+        text = text.unicodeScalars
+            .filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }
+            .reduce("") { $0 + String($1) }
+        // 3. 處理換行停頓
+        text = text.replacingOccurrences(of: "\n", with: "，")
+        return text
     }
 }
