@@ -13,14 +13,19 @@ struct ContentView: View {
     @State private var isPlaying: Bool = false
     @State private var userSpokenText: String = ""
     
+    // 🔥 新增：記住上一個問題 (為了 again 功能)
+    @State private var lastQuestion: String = ""
+    
     // 任務管理 (用於取消)
     @State private var currentTask: Task<Void, Never>?
     
-    // 連線狀態 (nil = 檢查中, true = 成功, false = 失敗)
+    // 連線狀態
     @State private var isServerConnected: Bool? = nil
     
-    // 歷史紀錄頁面控制
+    // 頁面控制
     @State private var showHistory: Bool = false
+    @State private var showPrivacy: Bool = false
+    @State private var showEULA: Bool = false
     
     // 播放與文字進度
     @State private var audioPlayer: AVAudioPlayer?
@@ -59,10 +64,8 @@ struct ContentView: View {
                    
                     // --- A. 頂部導覽列 ---
                     HStack {
-                        // 1. 成長足跡按鈕 (左上角)
-                        Button(action: {
-                            showHistory = true
-                        }) {
+                        // 1. 成長足跡按鈕
+                        Button(action: { showHistory = true }) {
                             VStack(spacing: 2) {
                                 Image(systemName: "clock.arrow.circlepath")
                                     .font(.system(size: 18))
@@ -78,7 +81,7 @@ struct ContentView: View {
                         
                         Spacer()
                         
-                        // 2. 連線狀態 (中間偏左)
+                        // 2. 連線狀態
                         Button(action: {
                             let generator = UIImpactFeedbackGenerator(style: .light)
                             generator.impactOccurred()
@@ -103,7 +106,7 @@ struct ContentView: View {
                        
                         Spacer()
                        
-                        // 3. 語言切換 (右上角)
+                        // 3. 語言切換
                         HStack(spacing: 0) {
                             LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
                                 switchLanguage(to: .chinese)
@@ -280,7 +283,7 @@ struct ContentView: View {
                         .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
                         .padding(.horizontal, 24)
                        
-                        // 2. 按鈕區 (只有麥克風與取消，無相機)
+                        // 2. 按鈕區
                         ZStack {
                             if isPlaying {
                                 HStack {
@@ -323,7 +326,6 @@ struct ContentView: View {
                                 }
                             }
                             .disabled(isPreparingRecording)
-                            // ⚠️ 移除了長按相機功能
                            
                             if !isRecording && !isThinking && !isPreparingRecording && aiResponse.count > 20 && !isPlaying {
                                 HStack {
@@ -346,11 +348,29 @@ struct ContentView: View {
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(.gray.opacity(0.9))
                        
-                        // 4. 資料來源
-                        Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
-                            .font(.system(size: 12, weight: .bold))
-                            .foregroundColor(.red.opacity(0.8))
-                            .padding(.bottom, 60)
+                        // 4. 資料來源與法律條款 (加深顏色 + 抬高位置)
+                        VStack(spacing: 10) {
+                            Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
+                                .font(.system(size: 12, weight: .bold))
+                                .foregroundColor(.red.opacity(0.8))
+                            
+                            HStack(spacing: 15) {
+                                Button(action: { showPrivacy = true }) {
+                                    Text(selectedLanguage == .chinese ? "隱私權政策" : "Privacy Policy")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .underline()
+                                        .foregroundColor(.MagicBlue)
+                                }
+                                Text("|").font(.system(size: 11)).foregroundColor(.MagicBlue.opacity(0.5))
+                                Button(action: { showEULA = true }) {
+                                    Text("EULA")
+                                        .font(.system(size: 11, weight: .medium))
+                                        .underline()
+                                        .foregroundColor(.MagicBlue)
+                                }
+                            }
+                        }
+                        .padding(.bottom, 50)
                     }
                     .padding(.bottom, 10)
                 }
@@ -363,10 +383,9 @@ struct ContentView: View {
                         .zIndex(100)
                 }
             }
-            // 彈出歷史紀錄
-            .sheet(isPresented: $showHistory) {
-                HistoryView(isPresented: $showHistory, language: selectedLanguage)
-            }
+            .sheet(isPresented: $showHistory) { HistoryView(isPresented: $showHistory, language: selectedLanguage) }
+            .sheet(isPresented: $showPrivacy) { LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy) }
+            .sheet(isPresented: $showEULA) { LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA) }
         }
         .onAppear {
             SpeechService.shared.requestAuthorization()
@@ -411,7 +430,6 @@ struct ContentView: View {
         startListening()
     }
     
-    // 取消 AI 任務
     func cancelThinking() {
         print("🛑 使用者手動取消思考")
         currentTask?.cancel()
@@ -423,9 +441,13 @@ struct ContentView: View {
     }
     
     func askExplainAgain() {
+        // 確保有上一個問題，如果沒有就預設一個，避免壞掉
+        let questionToAsk = lastQuestion.isEmpty ? (selectedLanguage == .chinese ? "這個" : "this") : lastQuestion
+        
         let prompt = selectedLanguage == .chinese ?
-            "請用更簡單、更生動的比喻，再解釋一次剛剛的內容，就像講故事給 5 歲小朋友聽一樣。" :
-            "Please explain that again in a much simpler way, use analogies, like telling a story to a 5-year-old."
+            "小朋友剛剛問：「\(questionToAsk)」。但他聽不懂剛才的解釋。請你換個方式，用更簡單、更生動的比喻，再解釋一次這個問題，就像講故事給 3-5 歲幼童聽一樣。" :
+            "The child previously asked: \"\(questionToAsk)\". They didn't understand the explanation. Please explain this question again using much simpler analogies, like telling a story to a 3-5 year old."
+        
         userSpokenText = selectedLanguage == .chinese ? "🔄 老師，可以講簡單一點嗎？" : "🔄 Teacher, simpler please?"
         sendToAI(question: prompt)
     }
@@ -478,37 +500,44 @@ struct ContentView: View {
     }
     
     func startListening() {
-        guard !isThinking && !isPreparingRecording else { return }
-        stopAudio()
-        isPreparingRecording = true
-        isRecording = false
-        userSpokenText = "..."
-        currentWordIndex = 0
-        currentSentenceIndex = 0
-        isUserScrolling = false
-        
-        SpeechService.shared.onRecordingStarted = {
-            self.isPreparingRecording = false
-            self.isRecording = true
-            self.userSpokenText = self.aiListeningSymbol
-        }
-        
-        SpeechService.shared.onSpeechDetected = { text, isFinished in
-            if isFinished {
-                self.finishRecording()
-            } else {
-                if !text.isEmpty { self.userSpokenText = text }
+            guard !isThinking && !isPreparingRecording else { return }
+            
+            // 🔥 修改：改用 .heavy (重擊) 模式，震動感最強烈
+            let generator = UIImpactFeedbackGenerator(style: .heavy)
+            // 💡 讓震動引擎準備好 (這行可以降低延遲)
+            generator.prepare()
+            generator.impactOccurred()
+            
+            stopAudio()
+            isPreparingRecording = true
+            isRecording = false
+            userSpokenText = "..."
+            currentWordIndex = 0
+            currentSentenceIndex = 0
+            isUserScrolling = false
+            
+            SpeechService.shared.onRecordingStarted = {
+                self.isPreparingRecording = false
+                self.isRecording = true
+                self.userSpokenText = self.aiListeningSymbol
+            }
+            
+            SpeechService.shared.onSpeechDetected = { text, isFinished in
+                if isFinished {
+                    self.finishRecording()
+                } else {
+                    if !text.isEmpty { self.userSpokenText = text }
+                }
+            }
+            
+            do {
+                try SpeechService.shared.startRecording(language: selectedLanguage)
+            } catch {
+                userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
+                isPreparingRecording = false
+                isRecording = false
             }
         }
-        
-        do {
-            try SpeechService.shared.startRecording(language: selectedLanguage)
-        } catch {
-            userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
-            isPreparingRecording = false
-            isRecording = false
-        }
-    }
     
     func manualStop() {
         SpeechService.shared.stopRecording()
@@ -525,10 +554,11 @@ struct ContentView: View {
             userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
             return
         }
+        // 🔥 紀錄問題
+        lastQuestion = userSpokenText
         sendToAI(question: userSpokenText)
     }
     
-    // 🔥 一般問答
     func sendToAI(question: String) {
         currentTask?.cancel()
         isThinking = true
@@ -545,7 +575,6 @@ struct ContentView: View {
                 if Task.isCancelled { return }
 
                 await MainActor.run {
-                    // 💾 紀錄成長足跡 (HistoryManager)
                     HistoryManager.shared.addRecord(
                         question: question,
                         answer: answer,
@@ -725,6 +754,8 @@ struct LanguageButton: View {
         }
     }
 }
+
+// ⚠️ 移除了 ImagePicker 結構 (因為不需要相機了)
 
 extension Color {
     static let CreamWhite = Color(red: 1.0, green: 0.99, blue: 0.96)

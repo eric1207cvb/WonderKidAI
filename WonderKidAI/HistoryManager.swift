@@ -22,11 +22,19 @@ class HistoryManager: ObservableObject {
     }
     
     func addRecord(question: String, answer: String, language: String) {
-        let newItem = HistoryItem(id: UUID(), date: Date(), question: question, answer: answer, language: language)
-        // 插入到最前面 (最新到最舊)
-        history.insert(newItem, at: 0)
-        saveHistory()
-    }
+            let newItem = HistoryItem(id: UUID(), date: Date(), question: question, answer: answer, language: language)
+            
+            // 1. 插入到最前面 (最新)
+            history.insert(newItem, at: 0)
+            
+            // 2. 🔥 新增：檢查數量上限 (例如只留 50 筆)
+            // 如果超過 50 筆，就把最舊的 (最後面) 刪掉
+            if history.count > 50 {
+                history.removeLast()
+            }
+            
+            saveHistory()
+        }
     
     func clearHistory() {
         history.removeAll()
