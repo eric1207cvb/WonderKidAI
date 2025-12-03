@@ -91,7 +91,6 @@ struct HistoryView: View {
     
     func deleteItems(at offsets: IndexSet) {
         // 這裡需要實作刪除邏輯，簡單起見先重整
-        // 實際專案建議在 Manager 加一個 remove 函式
         var items = manager.history
         items.remove(atOffsets: offsets)
         // 重新存回去 (簡化版做法)
