@@ -385,12 +385,12 @@ struct ContentView: View {
             .sheet(isPresented: $showPaywall) {
                 PaywallView(displayCloseButton: true)
                     .onPurchaseCompleted { customerInfo in
-                        self.isPro = customerInfo.entitlements["pro_access"]?.isActive == true
+                        self.isPro = customerInfo.entitlements["pro"]?.isActive == true
                         self.showPaywall = false
                         print("🎉 購買成功！")
                     }
                     .onRestoreCompleted { customerInfo in
-                        self.isPro = customerInfo.entitlements["pro_access"]?.isActive == true
+                        self.isPro = customerInfo.entitlements["pro"]?.isActive == true
                         if self.isPro {
                             self.showPaywall = false
                             print("🎉 恢復購買成功！")
@@ -409,10 +409,11 @@ struct ContentView: View {
             SpeechService.shared.requestAuthorization()
             updateContentData()
             checkServerStatus()
-            
+
             Purchases.shared.getCustomerInfo { (info, error) in
                 if let info = info {
-                    self.isPro = info.entitlements["pro_access"]?.isActive == true
+                    self.isPro = info.entitlements["pro"]?.isActive == true
+                    print("👀 current entitlements:", info.entitlements.all.keys)
                 }
             }
         }

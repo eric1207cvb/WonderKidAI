@@ -8,7 +8,7 @@ struct WonderKidAIApp: App {
         // 🔥 初始化 RevenueCat
         // 請去 RevenueCat 後台 -> API Keys -> 複製 "Public SDK Key" (appl_xxxx...)
         Purchases.logLevel = .debug
-        Purchases.configure(withAPIKey: "test_DlwDxLGmAkXmSCQZzMXRSQQvsaV")
+        Purchases.configure(withAPIKey: "appl_NSAHxRGGvIsicrSoplahHXZwhen")
     }
     
     var body: some Scene {
