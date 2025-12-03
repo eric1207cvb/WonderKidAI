@@ -2,9 +2,16 @@ import SwiftUI
 import AVFoundation
 
 struct ContentView: View {
+    // MARK: - 系統環境變數 (用來偵測螢幕鎖定)
+    @Environment(\.scenePhase) var scenePhase
+    
     // MARK: - 狀態變數
-    @State private var selectedLanguage: AppLanguage = .chinese
+    @State private var selectedLanguage: AppLanguage = Locale.current.identifier.hasPrefix("zh") ? .chinese : .english
     @State private var aiResponse: String = "嗨！我是安安老師～\n小朋友你想知道什麼呢？"
+    
+    // 🔥 修改：分開記錄中英文是否已介紹過 (使用 @State，不永久儲存)
+    @State private var hasPlayedChineseIntro: Bool = false
+    @State private var hasPlayedEnglishIntro: Bool = false
     
     // 狀態機
     @State private var isRecording: Bool = false
@@ -324,6 +331,7 @@ struct ContentView: View {
                             }
                             .disabled(isPreparingRecording)
                            
+                            // 🔄 "聽不懂 / Again" 按鈕
                             if !isRecording && !isThinking && !isPreparingRecording && aiResponse.count > 20 && !isPlaying {
                                 HStack {
                                     Spacer()
@@ -384,6 +392,14 @@ struct ContentView: View {
             .sheet(isPresented: $showPrivacy) { LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy) }
             .sheet(isPresented: $showEULA) { LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA) }
         }
+        // 🔥 新增：監聽 App 狀態，如果進入背景（鎖定螢幕或跳出），就重置自我介紹旗標
+        .onChange(of: scenePhase) { newPhase in
+            if newPhase == .background {
+                print("💤 App 進入背景，重置自我介紹記憶")
+                hasPlayedChineseIntro = false
+                hasPlayedEnglishIntro = false
+            }
+        }
         .onAppear {
             SpeechService.shared.requestAuthorization()
             updateContentData()
@@ -437,7 +453,18 @@ struct ContentView: View {
         generator.impactOccurred()
     }
     
+    // 🔥 修改：獨立判斷中英文是否第一次使用
     func askExplainAgain() {
+        // 判斷條件：(中文模式 且 沒聽過中文介紹) 或 (英文模式 且 沒聽過英文介紹)
+        let needsIntro = (selectedLanguage == .chinese && !hasPlayedChineseIntro) ||
+                         (selectedLanguage == .english && !hasPlayedEnglishIntro)
+        
+        if needsIntro {
+            playIntroMessage()
+            return
+        }
+        
+        // 否則執行正常的「再解釋」
         let questionToAsk = lastQuestion.isEmpty ? (selectedLanguage == .chinese ? "這個" : "this") : lastQuestion
         
         let prompt = selectedLanguage == .chinese ?
@@ -446,6 +473,46 @@ struct ContentView: View {
         
         userSpokenText = selectedLanguage == .chinese ? "🔄 老師，可以講簡單一點嗎？" : "🔄 Teacher, simpler please?"
         sendToAI(question: prompt)
+    }
+    
+    // 🔥 修改：播放介紹並分別標記已讀
+    func playIntroMessage() {
+        isThinking = true
+        let introText: String
+        
+        if selectedLanguage == .chinese {
+            introText = "嗨！我是安安老師，你的第一本 AI 百科全書。如果有自然、數學、地理、天文、語文、歷史，或是日常生活的問題，都可以問我喔！"
+        } else {
+            introText = "Hello! I am Teacher An-An, your first AI encyclopedia. You can ask me about nature, math, geography, space, history, or anything in your daily life. I am here to help you!"
+        }
+        
+        userSpokenText = selectedLanguage == .chinese ? "👋 初次見面！" : "👋 Hello!"
+        
+        currentTask = Task {
+            do {
+                await MainActor.run {
+                    aiResponse = introText
+                    updateContentData()
+                    isThinking = false
+                }
+                
+                let cleanText = introText.cleanForTTS()
+                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
+                
+                await playAudio(data: audioData, textToRead: introText)
+                
+                // ✅ 根據當前語言，標記對應的旗標
+                if selectedLanguage == .chinese {
+                    hasPlayedChineseIntro = true
+                } else {
+                    hasPlayedEnglishIntro = true
+                }
+                
+            } catch {
+                print("Intro TTS failed")
+                isThinking = false
+            }
+        }
     }
     
     func switchLanguage(to lang: AppLanguage) {
@@ -498,7 +565,6 @@ struct ContentView: View {
     func startListening() {
         guard !isThinking && !isPreparingRecording else { return }
         
-        // 🔥 重擊震動
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.prepare()
         generator.impactOccurred()
@@ -549,12 +615,10 @@ struct ContentView: View {
             userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
             return
         }
-        // 紀錄問題
         lastQuestion = userSpokenText
         sendToAI(question: userSpokenText)
     }
     
-    // 🔥 一般問答
     func sendToAI(question: String) {
         currentTask?.cancel()
         isThinking = true
@@ -586,7 +650,6 @@ struct ContentView: View {
                 
                 if Task.isCancelled { return }
                 
-                // 🔥 關鍵修改：使用 cleanForTTS 清洗文字
                 let cleanText = answer.cleanForTTS()
                 let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
                 
@@ -782,18 +845,15 @@ extension String {
         return result
     }
     
-    // 🔥 新增：文字清潔工，讓 TTS 唸得更順
+    // 文字清潔工
     func cleanForTTS() -> String {
         var text = self
-        // 1. 移除 Markdown
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "#", with: "")
         text = text.replacingOccurrences(of: "`", with: "")
-        // 2. 移除 Emoji (可選，這裡示範移除)
         text = text.unicodeScalars
             .filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }
             .reduce("") { $0 + String($1) }
-        // 3. 處理換行停頓
         text = text.replacingOccurrences(of: "\n", with: "，")
         return text
     }
