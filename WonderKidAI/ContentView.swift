@@ -37,6 +37,7 @@ struct ContentView: View {
     
     // 付費牆控制
     @State private var showPaywall: Bool = false
+    @State private var showParentalGate: Bool = false // 家長鎖開關
     @State private var isPro: Bool = false
     
     // 狀態機
@@ -186,9 +187,7 @@ struct ContentView: View {
                     // --- 底部區 ---
                     VStack(spacing: 20) {
                         
-                        // 🔥 修正關鍵：將 ScrollViewReader 移到最外層
                         ScrollViewReader { proxy in
-                            
                             // 字幕框
                             ZStack(alignment: .bottom) {
                                 ScrollView {
@@ -280,48 +279,40 @@ struct ContentView: View {
                                     .transition(.opacity)
                                 }
                                 
-                                // 🔥 Focus 按鈕 (現在它在 proxy 的範圍內了！)
+                                // Focus 按鈕
                                 if isUserScrolling && isPlaying {
-                                                                    Button(action: {
-                                                                        // 1. 先標記使用者停止滑動 (這會讓按鈕開始消失)
-                                                                        isUserScrolling = false
-                                                                        
-                                                                        // 2. 延遲 0.1 秒，等 UI 狀態穩定後再強制捲動
-                                                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                                                            withAnimation(.spring()) {
-                                                                                if selectedLanguage == .english {
-                                                                                    // 英文：捲動到句子 ID
-                                                                                    proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
-                                                                                } else {
-                                                                                    // 中文：捲動到單字 ID
-                                                                                    proxy.scrollTo(currentWordIndex, anchor: .center)
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                    }) {
-                                                                        HStack(spacing: 4) {
-                                                                            Image(systemName: "location.fill")
-                                                                            Text(selectedLanguage == .chinese ? "唸到這" : "Focus")
-                                                                                .font(.caption)
-                                                                                .bold()
-                                                                        }
-                                                                        .padding(8)
-                                                                        .background(Color.MagicBlue)
-                                                                        .foregroundColor(.white)
-                                                                        .cornerRadius(20)
-                                                                        .shadow(radius: 3)
-                                                                    }
-                                                                    .padding(12)
-                                                                    .transition(.scale.combined(with: .opacity))
-                                                                }
+                                    Button(action: {
+                                        isUserScrolling = false
+                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                            withAnimation(.spring()) {
+                                                if selectedLanguage == .english {
+                                                    proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
+                                                } else {
+                                                    proxy.scrollTo(currentWordIndex, anchor: .center)
+                                                }
+                                            }
+                                        }
+                                    }) {
+                                        HStack(spacing: 4) {
+                                            Image(systemName: "location.fill")
+                                            Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
+                                        }
+                                        .padding(8)
+                                        .background(Color.MagicBlue)
+                                        .foregroundColor(.white)
+                                        .cornerRadius(20)
+                                        .shadow(radius: 3)
+                                    }
+                                    .padding(12)
+                                    .transition(.scale.combined(with: .opacity))
+                                }
                             }
                             .frame(height: geometry.size.height * 0.33)
                             .background(Color.white.opacity(0.95))
                             .cornerRadius(25)
                             .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
                             .padding(.horizontal, 24)
-                            
-                        } // 結束 ScrollViewReader
+                        }
                         
                         // 按鈕區
                         ZStack {
@@ -340,7 +331,7 @@ struct ContentView: View {
                                 }
                             }
                             
-                            // 主按鈕 (整合 Paywall 檢查)
+                            // 主按鈕
                             Button(action: {
                                 if isThinking {
                                     cancelThinking()
@@ -413,7 +404,7 @@ struct ContentView: View {
                     }
                     .padding(.bottom, 10)
                 }
-                .blur(radius: isServerConnected == nil ? 5 : 0)
+                .blur(radius: (isServerConnected == nil || showParentalGate) ? 5 : 0)
                 
                 // 載入遮罩
                 if isServerConnected == nil {
@@ -421,26 +412,48 @@ struct ContentView: View {
                         .transition(.opacity.animation(.easeInOut(duration: 0.5)))
                         .zIndex(100)
                 }
+                
+                // 🔥 家長鎖視窗 (Parental Gate)
+                if showParentalGate {
+                    ParentalGateView(isPresented: $showParentalGate) {
+                        // 驗證成功後，開啟付費牆
+                        showPaywall = true
+                    }
+                    .zIndex(200)
+                }
             }
             .sheet(isPresented: $showHistory) { HistoryView(isPresented: $showHistory, language: selectedLanguage) }
             .sheet(isPresented: $showPrivacy) { LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy) }
             .sheet(isPresented: $showEULA) { LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA) }
             
-            // 🔥 付費牆 (Paywall)
+            // 🔥 付費牆 + 法律連結
             .sheet(isPresented: $showPaywall) {
-                PaywallView(displayCloseButton: true)
-                    .onPurchaseCompleted { customerInfo in
-                        self.isPro = customerInfo.entitlements["pro"]?.isActive == true
-                        self.showPaywall = false
-                        print("🎉 購買成功！")
-                    }
-                    .onRestoreCompleted { customerInfo in
-                        self.isPro = customerInfo.entitlements["pro"]?.isActive == true
-                        if self.isPro {
+                VStack(spacing: 0) {
+                    PaywallView(displayCloseButton: true)
+                        .onPurchaseCompleted { customerInfo in
+                            self.isPro = customerInfo.entitlements["pro"]?.isActive == true
                             self.showPaywall = false
-                            print("🎉 恢復購買成功！")
+                            print("🎉 購買成功！")
                         }
+                        .onRestoreCompleted { customerInfo in
+                            self.isPro = customerInfo.entitlements["pro"]?.isActive == true
+                            if self.isPro {
+                                self.showPaywall = false
+                                print("🎉 恢復購買成功！")
+                            }
+                        }
+                    
+                    // Apple 強制要求：訂閱頁面下方必須有 Privacy 和 EULA 連結
+                    HStack(spacing: 20) {
+                        Link("Privacy Policy", destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI")!)
+                            .font(.caption)
+                        Text("|")
+                        Link("Terms of Use (EULA)", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
+                            .font(.caption)
                     }
+                    .padding()
+                    .foregroundColor(.gray)
+                }
             }
         }
         .onChange(of: scenePhase) { newPhase in
@@ -608,10 +621,10 @@ struct ContentView: View {
         }
     }
     
+    // 啟動錄音前，先跳家長鎖
     func startListening() {
-        // 🔥 檢查付費
         if !isPro {
-            showPaywall = true
+            showParentalGate = true
             return
         }
         
@@ -672,30 +685,24 @@ struct ContentView: View {
     }
     
     func sendToAI(question: String) {
-        // 1. 取消上一次還在跑的任務，避免打架
         currentTask?.cancel()
         isThinking = true
         
         currentTask = Task {
             do {
                 if Task.isCancelled { return }
-                
-                // 2. 發送請求給大腦
                 let answer = try await OpenAIService.shared.processMessage(
                     userMessage: question,
                     language: selectedLanguage
                 )
-                
                 if Task.isCancelled { return }
                 
-                // 3. 收到回答，更新畫面
                 await MainActor.run {
                     HistoryManager.shared.addRecord(
                         question: question,
                         answer: answer,
                         language: selectedLanguage == .chinese ? "zh-TW" : "en-US"
                     )
-                    
                     aiResponse = answer
                     currentWordIndex = 0
                     currentSentenceIndex = 0
@@ -704,34 +711,22 @@ struct ContentView: View {
                 }
                 
                 if Task.isCancelled { return }
-                
-                // 4. 產生語音 (TTS)
                 let cleanText = answer.cleanForTTS()
                 let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
-                
                 if Task.isCancelled { return }
-                
-                // 5. 播放聲音
                 await playAudio(data: audioData, textToRead: answer)
                 
             } catch {
-                // ⚠️ 錯誤處理區
-                
-                // 如果是使用者手動取消 (按了 X)，不顯示錯誤
                 if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
                     print("🚫 任務已取消，靜默處理")
                 } else {
-                    // 🔥 顯示溫馨的喝水提示
                     await MainActor.run {
                         if selectedLanguage == .chinese {
                             aiResponse = "🥤 安安老師去喝口水，馬上回來～\n(請檢查網路，再試一次喔！)"
                         } else {
                             aiResponse = "🥤 Teacher An-An is taking a water break.\n(Please check connection and try again!)"
                         }
-                        
-                        // 雖然畫面顯示喝水，但在 Console 還是要印出真實錯誤，方便你自己除錯
                         print("❌ 真實錯誤原因: \(error.localizedDescription)")
-                        
                         isThinking = false
                         updateContentData()
                     }
@@ -792,7 +787,78 @@ struct ContentView: View {
     }
 }
 
-// 🔥🔥 補回被遺漏的結構 🔥🔥
+// 🔥 修正版：家長鎖視窗 (強制文字顏色為黑色，解決深色模式問題)
+struct ParentalGateView: View {
+    @Binding var isPresented: Bool
+    var onSuccess: () -> Void
+    
+    // 隨機產生一個簡單題目
+    @State private var num1 = Int.random(in: 1...5)
+    @State private var num2 = Int.random(in: 1...5)
+    @State private var answer = ""
+    @State private var showError = false
+    
+    var body: some View {
+        ZStack {
+            Color.black.opacity(0.4).ignoresSafeArea()
+            VStack(spacing: 20) {
+                Image(systemName: "lock.circle.fill")
+                    .font(.system(size: 50))
+                    .foregroundColor(.MagicBlue)
+                
+                Text("家長確認 (Parent Gate)")
+                    .font(.headline)
+                    .foregroundColor(.black) // 🔥 強制黑色
+                
+                Text("請回答：\(num1) + \(num2) = ?")
+                    .font(.title2).bold()
+                    .foregroundColor(.black) // 🔥 強制黑色
+                
+                TextField("答案", text: $answer)
+                    .keyboardType(.numberPad)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                    .background(Color.gray.opacity(0.1))
+                    .cornerRadius(10)
+                    .frame(width: 100)
+                    .foregroundColor(.black) // 🔥 強制黑色
+                
+                if showError {
+                    Text("答案錯誤，請再試一次")
+                        .foregroundColor(.red)
+                        .font(.caption)
+                }
+                
+                HStack {
+                    Button("取消") { isPresented = false }
+                        .foregroundColor(.gray)
+                    
+                    Spacer().frame(width: 40)
+                    
+                    Button("確認") {
+                        let input = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+                        if Int(input) == (num1 + num2) {
+                            onSuccess()
+                            isPresented = false
+                        } else {
+                            showError = true
+                            answer = ""
+                        }
+                    }
+                    .bold()
+                    .foregroundColor(.MagicBlue)
+                }
+            }
+            .padding(30)
+            .background(Color.white)
+            .cornerRadius(20)
+            .shadow(radius: 10)
+            .padding(40)
+        }
+    }
+}
+
+// 🔥🔥 補回遺漏結構 🔥🔥
 
 struct LoadingCoverView: View {
     @State private var isRotating = false
