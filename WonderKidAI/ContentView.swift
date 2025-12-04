@@ -13,18 +13,13 @@ struct ContentView: View {
     
     // 🔥 強制設定語言的初始化區塊
     init() {
-        // 1. 改抓「使用者偏好語言順序」的第一個
         let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
-        
         print("📱 偵測到的系統語言 (current): \(Locale.current.identifier)")
         print("❤️ 使用者偏好語言 (preferred): \(preferredLang)")
         
-        // 2. 判斷是否為中文
         let isChinese = preferredLang.hasPrefix("zh")
-        
         print("🤖 最終判定結果: \(isChinese ? "中文模式" : "英文模式")")
         
-        // 3. 強制寫入 State
         _selectedLanguage = State(initialValue: isChinese ? .chinese : .english)
         _aiResponse = State(initialValue: isChinese ?
             "嗨！我是安安老師～\n小朋友你想知道什麼呢？" :
@@ -37,7 +32,7 @@ struct ContentView: View {
     
     // 付費牆控制
     @State private var showPaywall: Bool = false
-    @State private var showParentalGate: Bool = false // 家長鎖開關
+    @State private var showParentalGate: Bool = false
     @State private var isPro: Bool = false
     
     // 狀態機
@@ -331,7 +326,7 @@ struct ContentView: View {
                                 }
                             }
                             
-                            // 主按鈕
+                            // 主按鈕 (整合 Paywall & 免費次數)
                             Button(action: {
                                 if isThinking {
                                     cancelThinking()
@@ -445,7 +440,7 @@ struct ContentView: View {
                     
                     // Apple 強制要求：訂閱頁面下方必須有 Privacy 和 EULA 連結
                     HStack(spacing: 20) {
-                        Link("Privacy Policy", destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI")!)
+                        Link("Privacy Policy", destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")!)
                             .font(.caption)
                         Text("|")
                         Link("Terms of Use (EULA)", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
@@ -478,6 +473,24 @@ struct ContentView: View {
     }
     
     // MARK: - 邏輯區
+    
+    // 🔥 新增：檢查免費額度邏輯 (每日 3 次)
+    func checkFreeQuota() -> Bool {
+        if isPro { return true } // 付費會員無限制
+        
+        let calendar = Calendar.current
+        let today = Date()
+        
+        // 從歷史紀錄算今天有幾筆
+        let todayCount = HistoryManager.shared.history.filter { item in
+            return calendar.isDate(item.date, inSameDayAs: today)
+        }.count
+        
+        let freeLimit = 3
+        print("📊 今天已使用次數: \(todayCount) / \(freeLimit)")
+        
+        return todayCount < freeLimit
+    }
     
     func updateContentData() {
         if selectedLanguage == .chinese {
@@ -621,10 +634,21 @@ struct ContentView: View {
         }
     }
     
-    // 啟動錄音前，先跳家長鎖
+    // 🔥 修改：啟動錄音前，先檢查免費額度，再跳家長鎖
     func startListening() {
-        if !isPro {
-            showParentalGate = true
+        // 如果不是 Pro，且今天額度用完了
+        if !isPro && !checkFreeQuota() {
+            // 顯示提示文字
+            if selectedLanguage == .chinese {
+                userSpokenText = "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
+            } else {
+                userSpokenText = "🔒 Free quota used up today!\nAsk parents to unlock."
+            }
+            
+            // 稍微延遲一下，讓使用者看到上面的字，再跳出家長鎖
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                showParentalGate = true
+            }
             return
         }
         
@@ -691,10 +715,12 @@ struct ContentView: View {
         currentTask = Task {
             do {
                 if Task.isCancelled { return }
+                
                 let answer = try await OpenAIService.shared.processMessage(
                     userMessage: question,
                     language: selectedLanguage
                 )
+                
                 if Task.isCancelled { return }
                 
                 await MainActor.run {
@@ -703,6 +729,7 @@ struct ContentView: View {
                         answer: answer,
                         language: selectedLanguage == .chinese ? "zh-TW" : "en-US"
                     )
+                    
                     aiResponse = answer
                     currentWordIndex = 0
                     currentSentenceIndex = 0
@@ -711,9 +738,12 @@ struct ContentView: View {
                 }
                 
                 if Task.isCancelled { return }
+                
                 let cleanText = answer.cleanForTTS()
                 let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
+                
                 if Task.isCancelled { return }
+                
                 await playAudio(data: audioData, textToRead: answer)
                 
             } catch {
@@ -787,12 +817,11 @@ struct ContentView: View {
     }
 }
 
-// 🔥 修正版：家長鎖視窗 (強制文字顏色為黑色，解決深色模式問題)
+// 家長鎖視窗 (深色模式修正版)
 struct ParentalGateView: View {
     @Binding var isPresented: Bool
     var onSuccess: () -> Void
     
-    // 隨機產生一個簡單題目
     @State private var num1 = Int.random(in: 1...5)
     @State private var num2 = Int.random(in: 1...5)
     @State private var answer = ""
@@ -808,11 +837,11 @@ struct ParentalGateView: View {
                 
                 Text("家長確認 (Parent Gate)")
                     .font(.headline)
-                    .foregroundColor(.black) // 🔥 強制黑色
+                    .foregroundColor(.black)
                 
                 Text("請回答：\(num1) + \(num2) = ?")
                     .font(.title2).bold()
-                    .foregroundColor(.black) // 🔥 強制黑色
+                    .foregroundColor(.black)
                 
                 TextField("答案", text: $answer)
                     .keyboardType(.numberPad)
@@ -821,7 +850,7 @@ struct ParentalGateView: View {
                     .background(Color.gray.opacity(0.1))
                     .cornerRadius(10)
                     .frame(width: 100)
-                    .foregroundColor(.black) // 🔥 強制黑色
+                    .foregroundColor(.black)
                 
                 if showError {
                     Text("答案錯誤，請再試一次")
@@ -858,8 +887,7 @@ struct ParentalGateView: View {
     }
 }
 
-// 🔥🔥 補回遺漏結構 🔥🔥
-
+// 輔助元件
 struct LoadingCoverView: View {
     @State private var isRotating = false
     var body: some View {

@@ -68,7 +68,7 @@ By downloading or using this App, you agree to the terms of the **Apple Standard
 
 #### 4. 聯絡我們
 如果您對本隱私權政策有任何疑問，請聯繫開發者：
-- **開發者：** Hsueh Yi An (薛先生)
+- **開發者：** Hsueh Yi An
 - **Email：** eric1207cvb@msn.com
 
 ---
