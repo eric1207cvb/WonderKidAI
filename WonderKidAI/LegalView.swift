@@ -14,10 +14,59 @@ struct LegalView: View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
+                    
+                    // 1. 主要條款內容
                     Text(getContent())
                         .font(.system(size: 14))
                         .foregroundColor(.primary)
                         .lineSpacing(4)
+                    
+                    // 2. 分隔線
+                    Divider()
+                        .padding(.vertical, 10)
+                    
+                    // 3. 🔥 新增：外部超連結按鈕 (EULA 專用)
+                    if type == .eula {
+                        Link(destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!) {
+                            HStack {
+                                Image(systemName: "link.circle.fill")
+                                    .font(.system(size: 20))
+                                Text(language == .chinese ? "點此閱讀完整 Apple EULA 條款" : "Read Full Apple EULA")
+                                    .fontWeight(.bold)
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.caption)
+                            }
+                            .padding()
+                            .foregroundColor(.white)
+                            .background(Color.MagicBlue) // 使用你的主題色
+                            .cornerRadius(12)
+                            .shadow(radius: 2)
+                        }
+                    } else if type == .privacy {
+                        // 隱私權政策的外部連結 (連回你的 GitHub 隱私頁面)
+                        Link(destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")!) {
+                            HStack {
+                                Image(systemName: "hand.raised.fill")
+                                    .font(.system(size: 20))
+                                Text(language == .chinese ? "線上查看完整隱私權政策" : "View Privacy Policy Online")
+                                    .fontWeight(.bold)
+                                Spacer()
+                                Image(systemName: "arrow.up.right.square")
+                                    .font(.caption)
+                            }
+                            .padding()
+                            .foregroundColor(.MagicBlue)
+                            .background(Color.white)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(Color.MagicBlue, lineWidth: 1)
+                            )
+                        }
+                    }
+                    
+                    // 底部留白，避免被 Home Bar 擋住
+                    Spacer(minLength: 40)
                 }
                 .padding()
             }
@@ -28,10 +77,12 @@ struct LegalView: View {
                     Button(action: { isPresented = false }) {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundColor(.gray)
+                            .font(.system(size: 24))
                     }
                 }
             }
         }
+        .navigationViewStyle(.stack) // 確保 iPad 相容性
     }
     
     func getTitle() -> String {
@@ -39,7 +90,7 @@ struct LegalView: View {
         case .privacy:
             return language == .chinese ? "隱私權政策" : "Privacy Policy"
         case .eula:
-            return language == .chinese ? "使用者授權協定 (EULA)" : "EULA"
+            return language == .chinese ? "使用者授權協定" : "EULA"
         }
     }
     
@@ -47,7 +98,7 @@ struct LegalView: View {
         if type == .privacy {
             if language == .chinese {
                 return """
-                【隱私權政策】
+                【隱私權政策摘要】
                 
                 最後更新日期：2025年12月
                 
@@ -67,7 +118,7 @@ struct LegalView: View {
                 """
             } else {
                 return """
-                [Privacy Policy]
+                [Privacy Policy Summary]
                 
                 Last Updated: Dec 2025
                 
@@ -92,14 +143,12 @@ struct LegalView: View {
                 return """
                 【標準使用者授權合約 (EULA)】
                 
-                本應用程式依據 Apple 標準使用者授權合約提供使用。
+                本應用程式依據 Apple 標準使用者授權合約 (Standard EULA) 提供使用。
                 
                 1. 您確認本協議是您與開發者之間的協議，而非 Apple。
                 2. 開發者對本應用程式的內容全權負責。
                 3. 您同意遵守所有適用的第三方合約條款。
                 4. 您承認 Apple 對本應用程式不負有維護或支援的義務。
-                
-                (完整條款請參閱 Apple Media Services Terms and Conditions)
                 """
             } else {
                 return """
@@ -110,16 +159,8 @@ struct LegalView: View {
                 1. Acknowledgment: You and the Developer acknowledge that this EULA is concluded between You and the Developer only, and not with Apple.
                 2. Developer is solely responsible for the App and its content.
                 3. No Warranty: The App is provided "as is".
-                
-                (For full terms, please refer to Apple Media Services Terms and Conditions)
                 """
             }
         }
     }
-}//
-//  LegalView.swift
-//  WonderKidAI
-//
-//  Created by 薛宜安 on 2025/12/2.
-//
-
+}

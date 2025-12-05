@@ -3,79 +3,103 @@ import SwiftUI
 struct HistoryView: View {
     @Binding var isPresented: Bool
     let language: AppLanguage
-    @StateObject private var manager = HistoryManager.shared
+    
+    // 引入管理員 (Singleton)
+    @ObservedObject private var manager = HistoryManager.shared
     
     var body: some View {
         NavigationView {
             ZStack {
-                Color.SoftBlue.opacity(0.3).ignoresSafeArea()
+                // 1. 背景色 (自動適配深淺模式)
+                Color(uiColor: .systemGroupedBackground)
+                    .ignoresSafeArea()
                 
+                // 2. 內容區
                 if manager.history.isEmpty {
+                    // --- 空狀態 (Empty State) ---
                     VStack(spacing: 20) {
                         Image(systemName: "text.book.closed")
                             .font(.system(size: 60))
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary) // 自動變灰色
+                        
                         Text(language == .chinese ? "還沒有紀錄喔\n快去問問安安老師吧！" : "No records yet.\nGo ask Teacher An-An!")
                             .multilineTextAlignment(.center)
-                            .foregroundColor(.gray)
+                            .foregroundColor(.secondary) // 自動變灰色
+                            .font(.system(.body, design: .rounded))
                     }
                 } else {
+                    // --- 列表內容 ---
                     List {
                         ForEach(manager.history) { item in
-                            VStack(alignment: .leading, spacing: 10) {
-                                // 日期與時間
+                            VStack(alignment: .leading, spacing: 12) {
+                                // A. 頂部資訊列 (日期 | 語言)
                                 HStack {
                                     Image(systemName: "calendar")
                                         .foregroundColor(.MagicBlue)
                                         .font(.caption)
+                                    
                                     Text(item.date.formatted(date: .numeric, time: .shortened))
                                         .font(.caption)
-                                        .foregroundColor(.gray)
+                                        .foregroundColor(.secondary)
+                                    
                                     Spacer()
-                                    // 語言標記
+                                    
+                                    // 顯示該筆紀錄是中文還是英文
                                     Text(item.language == "zh-TW" ? "🇹🇼" : "🇺🇸")
                                         .font(.caption)
+                                        .padding(4)
+                                        .background(Color.gray.opacity(0.2))
+                                        .cornerRadius(4)
                                 }
                                 
-                                // 問題 (小朋友)
+                                // B. 問題 (Q)
                                 HStack(alignment: .top) {
                                     Text("Q:")
                                         .font(.headline)
                                         .foregroundColor(.ButtonRed)
+                                    
                                     Text(item.question)
                                         .font(.body)
                                         .fontWeight(.medium)
-                                        .foregroundColor(.DarkText)
+                                        .foregroundColor(.primary) // 🔥 關鍵：深色模式變白，淺色模式變黑
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 
-                                // 回答 (老師) - 只顯示前兩行，太多會太長
+                                // C. 回答 (A)
                                 HStack(alignment: .top) {
                                     Text("A:")
                                         .font(.headline)
                                         .foregroundColor(.MagicBlue)
+                                    
                                     Text(item.answer)
                                         .font(.subheadline)
-                                        .foregroundColor(.gray)
-                                        .lineLimit(3) // 只顯示3行，保持版面整潔
+                                        .foregroundColor(.secondary) // 🔥 關鍵：次要文字自動變灰
+                                        .lineLimit(3) // 預覽只顯示 3 行
                                 }
                             }
                             .padding(.vertical, 8)
                         }
-                        .onDelete(perform: deleteItems) // 允許家長刪除單條紀錄
+                        // 刪除功能
+                        .onDelete { indexSet in
+                            manager.deleteRecord(at: indexSet)
+                        }
                     }
-                    .listStyle(.insetGrouped)
+                    .listStyle(.insetGrouped) // 使用群組樣式，質感較好
                 }
             }
             .navigationTitle(language == .chinese ? "👶 成長足跡" : "👶 Growth Journey")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                // 右上角關閉按鈕
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button(action: { isPresented = false }) {
                         Image(systemName: "xmark.circle.fill")
-                            .foregroundColor(.gray)
+                            .font(.system(size: 24))
+                            .foregroundColor(.secondary)
                     }
                 }
                 
+                // 左上角清空按鈕
                 ToolbarItem(placement: .navigationBarLeading) {
                     if !manager.history.isEmpty {
                         Button(language == .chinese ? "清空" : "Clear") {
@@ -87,16 +111,6 @@ struct HistoryView: View {
                 }
             }
         }
-    }
-    
-    func deleteItems(at offsets: IndexSet) {
-        // 這裡需要實作刪除邏輯，簡單起見先重整
-        var items = manager.history
-        items.remove(atOffsets: offsets)
-        // 重新存回去 (簡化版做法)
-        manager.history = items
-        if let encoded = try? JSONEncoder().encode(items) {
-            UserDefaults.standard.set(encoded, forKey: "WonderKidHistory")
-        }
+        .navigationViewStyle(.stack) // 確保 iPad 顯示正常
     }
 }

@@ -3,23 +3,21 @@ import AVFoundation
 import RevenueCat
 import RevenueCatUI
 
+// MARK: - 主畫面 ContentView
 struct ContentView: View {
     // MARK: - 系統環境變數
     @Environment(\.scenePhase) var scenePhase
     
     // MARK: - 狀態變數
+    @ObservedObject private var subManager = SubscriptionManager.shared
+    
     @State private var selectedLanguage: AppLanguage = .chinese
     @State private var aiResponse: String = ""
     
-    // 🔥 強制設定語言的初始化區塊
+    // 初始化語言設定
     init() {
         let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
-        print("📱 偵測到的系統語言 (current): \(Locale.current.identifier)")
-        print("❤️ 使用者偏好語言 (preferred): \(preferredLang)")
-        
         let isChinese = preferredLang.hasPrefix("zh")
-        print("🤖 最終判定結果: \(isChinese ? "中文模式" : "英文模式")")
-        
         _selectedLanguage = State(initialValue: isChinese ? .chinese : .english)
         _aiResponse = State(initialValue: isChinese ?
             "嗨！我是安安老師～\n小朋友你想知道什麼呢？" :
@@ -30,10 +28,9 @@ struct ContentView: View {
     @State private var hasPlayedChineseIntro: Bool = false
     @State private var hasPlayedEnglishIntro: Bool = false
     
-    // 付費牆控制
+    // 視窗控制
     @State private var showPaywall: Bool = false
     @State private var showParentalGate: Bool = false
-    @State private var isPro: Bool = false
     
     // 狀態機
     @State private var isRecording: Bool = false
@@ -66,7 +63,7 @@ struct ContentView: View {
     var body: some View {
         GeometryReader { geometry in
             ZStack {
-                // 背景層
+                // 1. 背景層
                 Image("KnowledgeBackground")
                     .resizable()
                     .scaledToFill()
@@ -82,28 +79,78 @@ struct ContentView: View {
                 )
                 .ignoresSafeArea()
                 
-                // 前景內容層
+                // 2. 前景內容層
                 VStack(spacing: 0) {
-                    // --- 頂部導覽列 ---
-                    HStack {
-                        // 足跡按鈕
-                        Button(action: { showHistory = true }) {
-                            VStack(spacing: 2) {
-                                Image(systemName: "clock.arrow.circlepath")
-                                    .font(.system(size: 18))
-                                Text(selectedLanguage == .chinese ? "足跡" : "History")
-                                    .font(.system(size: 10, weight: .bold))
+                    
+                    // --- 頂部導覽區 (左中右對稱佈局) ---
+                    VStack(spacing: 12) {
+                        
+                        // 第一層：功能按鈕 (左：紀錄 / 中：語言 / 右：VIP)
+                        ZStack {
+                            // 左側：足跡按鈕 (靠左對齊)
+                            HStack {
+                                Button(action: { showHistory = true }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: "clock.arrow.circlepath")
+                                            .font(.system(size: 16, weight: .semibold))
+                                        // 為了省空間，只在較寬的螢幕顯示文字
+                                        if geometry.size.width > 380 {
+                                            Text(selectedLanguage == .chinese ? "足跡" : "History")
+                                                .font(.system(size: 12, weight: .bold))
+                                        }
+                                    }
+                                    .padding(10)
+                                    .background(Color.white.opacity(0.9))
+                                    .foregroundColor(.MagicBlue)
+                                    .clipShape(Capsule())
+                                    .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                                }
+                                Spacer()
                             }
-                            .padding(8)
+                            
+                            // 中間：語言切換 (絕對置中)
+                            HStack(spacing: 0) {
+                                LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
+                                    switchLanguage(to: .chinese)
+                                }
+                                LanguageButton(title: "En", isSelected: selectedLanguage == .english) {
+                                    switchLanguage(to: .english)
+                                }
+                            }
                             .background(Color.white.opacity(0.9))
-                            .foregroundColor(.MagicBlue)
-                            .clipShape(Circle())
+                            .cornerRadius(20)
                             .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                            
+                            // 右側：VIP 按鈕 (靠右對齊)
+                            HStack {
+                                Spacer()
+                                Button(action: {
+                                    if !subManager.isPro {
+                                        showParentalGate = true
+                                    }
+                                }) {
+                                    HStack(spacing: 4) {
+                                        Image(systemName: subManager.isPro ? "crown.fill" : "crown")
+                                            .font(.system(size: 16))
+                                            .foregroundColor(subManager.isPro ? .yellow : .gray)
+                                        
+                                        if geometry.size.width > 380 {
+                                            Text(subManager.isPro ? "VIP" : "PRO")
+                                                .font(.system(size: 12, weight: .bold))
+                                                .foregroundColor(subManager.isPro ? .ButtonOrange : .gray)
+                                        }
+                                    }
+                                    .padding(.vertical, 8)
+                                    .padding(.horizontal, 12)
+                                    .background(Color.white.opacity(0.9))
+                                    .clipShape(Capsule())
+                                    .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                                }
+                            }
                         }
+                        .padding(.horizontal, 20)
                         
-                        Spacer()
-                        
-                        // 連線狀態
+                        // 第二層：狀態顯示 (獨立一行，保持畫面乾淨)
                         Button(action: {
                             let generator = UIImpactFeedbackGenerator(style: .light)
                             generator.impactOccurred()
@@ -112,78 +159,64 @@ struct ContentView: View {
                         }) {
                             HStack(spacing: 6) {
                                 Image(systemName: isServerConnected == true ? "person.wave.2.fill" : (isServerConnected == false ? "moon.zzz.fill" : "antenna.radiowaves.left.and.right"))
-                                    .font(.system(size: 14))
+                                    .font(.system(size: 12))
                                     .foregroundColor(isServerConnected == true ? .green : (isServerConnected == false ? .gray : .orange))
                                 
                                 Text(statusText)
-                                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                                    .font(.system(size: 12, weight: .bold, design: .rounded))
                                     .foregroundColor(isServerConnected == true ? .DarkText : .gray)
                             }
-                            .padding(.vertical, 8)
+                            .padding(.vertical, 6)
                             .padding(.horizontal, 12)
-                            .background(Color.white.opacity(0.9))
-                            .cornerRadius(20)
-                            .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                            .background(Color.white.opacity(0.6))
+                            .clipShape(Capsule())
                         }
-                        
-                        Spacer()
-                        
-                        // 語言切換
-                        HStack(spacing: 0) {
-                            LanguageButton(title: "中", isSelected: selectedLanguage == .chinese) {
-                                switchLanguage(to: .chinese)
-                            }
-                            LanguageButton(title: "En", isSelected: selectedLanguage == .english) {
-                                switchLanguage(to: .english)
-                            }
-                        }
-                        .background(Color.white.opacity(0.9))
-                        .cornerRadius(20)
-                        .shadow(color: Color.black.opacity(0.1), radius: 5, x: 0, y: 2)
                     }
-                    .padding(.horizontal, 20)
                     .padding(.top, 10)
                     
-                    Spacer()
+                    Spacer(minLength: 10)
                     
                     // --- 中間視覺區 ---
                     ZStack {
                         Circle()
                             .fill(Color.white.opacity(0.85))
-                            .frame(width: geometry.size.width * 0.45, height: geometry.size.width * 0.45)
+                            .frame(width: min(geometry.size.width * 0.45, 280), height: min(geometry.size.width * 0.45, 280))
                             .shadow(color: Color.white.opacity(0.6), radius: 20)
                         
+                        // 思考動畫
                         Circle()
                             .trim(from: 0, to: 0.7)
                             .stroke(LinearGradient(gradient: Gradient(colors: [.purple, .blue]), startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                            .frame(width: geometry.size.width * 0.4, height: geometry.size.width * 0.4)
+                            .frame(width: min(geometry.size.width * 0.4, 260), height: min(geometry.size.width * 0.4, 260))
                             .rotationEffect(Angle(degrees: isThinking ? 360 : 0))
                             .animation(isThinking ? Animation.linear(duration: 1.0).repeatForever(autoreverses: false) : .default, value: isThinking)
                             .opacity(isThinking ? 1 : 0)
                         
+                        // 錄音動畫
                         Circle()
                             .stroke(Color.ButtonRed.opacity(0.5), lineWidth: 8)
-                            .frame(width: geometry.size.width * 0.4, height: geometry.size.width * 0.4)
+                            .frame(width: min(geometry.size.width * 0.4, 260), height: min(geometry.size.width * 0.4, 260))
                             .scaleEffect(isRecording ? 1.1 : 1.0)
                             .opacity(isRecording ? 1 : 0)
                             .animation(isRecording ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isRecording)
                         
+                        // 核心 Icon
                         Image(systemName: isThinking ? "book.fill" : (isRecording ? "waveform.circle.fill" : "book.closed.fill"))
                             .resizable()
                             .scaledToFit()
-                            .frame(width: geometry.size.width * 0.2)
+                            .frame(width: min(geometry.size.width * 0.2, 130))
                             .foregroundColor(isRecording ? Color.ButtonRed : Color.MagicBlue)
                             .shadow(radius: 5)
                     }
                     .padding(.vertical, 10)
                     
-                    Spacer()
+                    Spacer(minLength: 10)
                     
-                    // --- 底部區 ---
+                    // --- 底部區 (字幕、按鈕、法律) ---
                     VStack(spacing: 20) {
                         
+                        // 1. 字幕框
                         ScrollViewReader { proxy in
-                            // 字幕框
                             ZStack(alignment: .bottom) {
                                 ScrollView {
                                     if isThinking {
@@ -200,106 +233,17 @@ struct ContentView: View {
                                             .id("UserText")
                                     } else {
                                         if selectedLanguage == .chinese {
-                                            LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
-                                                ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
-                                                    VStack(spacing: 0) {
-                                                        if !item.bopomofo.isEmpty {
-                                                            Text(item.bopomofo)
-                                                                .font(.system(size: 10, weight: .regular))
-                                                                .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.6))
-                                                                .fixedSize()
-                                                        }
-                                                        Text(item.char)
-                                                            .font(.system(size: 26, weight: .bold, design: .rounded))
-                                                            .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.5))
-                                                    }
-                                                    .id(index)
-                                                    .frame(minWidth: 38)
-                                                    .scaleEffect(index == currentWordIndex - 1 ? 1.2 : 1.0)
-                                                    .animation(.spring(response: 0.3), value: currentWordIndex)
-                                                }
-                                            }
-                                            .padding()
+                                            renderChineseContent(proxy: proxy)
                                         } else {
-                                            VStack(spacing: 12) {
-                                                ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
-                                                    let isActive = (index == currentSentenceIndex)
-                                                    Text(sentence)
-                                                        .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
-                                                        .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
-                                                        .multilineTextAlignment(.leading)
-                                                        .padding()
-                                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                                        .background(isActive ? Color.white : Color.white.opacity(0.5))
-                                                        .cornerRadius(16)
-                                                        .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
-                                                        .scaleEffect(isActive ? 1.02 : 1.0)
-                                                        .animation(.spring(), value: isActive)
-                                                        .id("Sentence-\(index)")
-                                                        .onTapGesture { isUserScrolling = true }
-                                                }
-                                            }
-                                            .padding()
-                                            .padding(.bottom, 40)
+                                            renderEnglishContent(proxy: proxy)
                                         }
                                     }
                                 }
                                 .simultaneousGesture(DragGesture().onChanged { _ in isUserScrolling = true })
-                                .onChange(of: currentWordIndex) { _, newIndex in
-                                    if selectedLanguage == .chinese && newIndex > 0 && !isUserScrolling {
-                                        withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
-                                    }
-                                }
-                                .onChange(of: currentSentenceIndex) { _, newIndex in
-                                    if selectedLanguage == .english && !isUserScrolling {
-                                        withAnimation(.easeInOut(duration: 0.5)) {
-                                            proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
-                                        }
-                                    }
-                                }
-                                .onChange(of: userSpokenText) { _, _ in
-                                    if isRecording { withAnimation { proxy.scrollTo("UserText", anchor: .bottom) } }
-                                }
-                                
-                                // 向下箭頭提示
-                                if selectedLanguage == .english && englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
-                                    VStack {
-                                        Spacer()
-                                        Image(systemName: "chevron.down.circle.fill")
-                                            .font(.system(size: 24))
-                                            .foregroundColor(.MagicBlue.opacity(0.6))
-                                            .padding(.bottom, 10)
-                                            .opacity(isPlaying ? 0 : 1)
-                                    }
-                                    .transition(.opacity)
-                                }
                                 
                                 // Focus 按鈕
                                 if isUserScrolling && isPlaying {
-                                    Button(action: {
-                                        isUserScrolling = false
-                                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                                            withAnimation(.spring()) {
-                                                if selectedLanguage == .english {
-                                                    proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
-                                                } else {
-                                                    proxy.scrollTo(currentWordIndex, anchor: .center)
-                                                }
-                                            }
-                                        }
-                                    }) {
-                                        HStack(spacing: 4) {
-                                            Image(systemName: "location.fill")
-                                            Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
-                                        }
-                                        .padding(8)
-                                        .background(Color.MagicBlue)
-                                        .foregroundColor(.white)
-                                        .cornerRadius(20)
-                                        .shadow(radius: 3)
-                                    }
-                                    .padding(12)
-                                    .transition(.scale.combined(with: .opacity))
+                                    focusButton(proxy: proxy)
                                 }
                             }
                             .frame(height: geometry.size.height * 0.33)
@@ -309,11 +253,13 @@ struct ContentView: View {
                             .padding(.horizontal, 24)
                         }
                         
-                        // 按鈕區
+                        // 2. 控制按鈕區
                         ZStack {
+                            // 中斷按鈕 (只有在播放時顯示)
                             if isPlaying {
                                 HStack {
-                                    Button(action: { interruptAndListen() }) {
+                                    // 🔥 修正動作：stopSpeaking (只停止，不錄音)
+                                    Button(action: { stopSpeaking() }) {
                                         ZStack {
                                             Circle().fill(Color.ButtonRed).frame(width: 60, height: 60)
                                                 .shadow(color: Color.ButtonRed.opacity(0.4), radius: 10, x: 0, y: 5)
@@ -326,32 +272,27 @@ struct ContentView: View {
                                 }
                             }
                             
-                            // 主按鈕 (整合 Paywall & 免費次數)
+                            // 主按鈕 (麥克風)
                             Button(action: {
-                                if isThinking {
-                                    cancelThinking()
-                                } else if isRecording {
-                                    manualStop()
-                                } else {
-                                    startListening()
-                                }
+                                if isThinking { cancelThinking() }
+                                else if isRecording { manualStop() }
+                                else { startListening() }
                             }) {
                                 ZStack {
                                     Circle()
                                         .fill(LinearGradient(gradient: Gradient(colors: isThinking ? [Color.ButtonRed] : (isRecording ? [Color.ButtonRed] : [Color.ButtonOrange, Color.ButtonRed])), startPoint: .topLeading, endPoint: .bottomTrailing))
                                         .frame(width: 80, height: 80)
-                                        .shadow(color: (isThinking || isRecording) ? Color.ButtonRed.opacity(0.4) : Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
+                                        .shadow(color: Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
                                         .scaleEffect(isRecording ? 1.1 : 1.0)
                                     
                                     Image(systemName: isThinking ? "xmark" : (isRecording ? "square.fill" : "mic.fill"))
                                         .font(.system(size: 30))
                                         .foregroundColor(.white)
-                                        .animation(.spring(), value: isRecording)
-                                        .animation(.spring(), value: isThinking)
                                 }
                             }
                             .disabled(isPreparingRecording)
                             
+                            // 再解釋一次按鈕
                             if !isRecording && !isThinking && !isPreparingRecording && aiResponse.count > 20 && !isPlaying {
                                 HStack {
                                     Spacer()
@@ -367,13 +308,12 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        .animation(.spring(), value: isPlaying)
                         
                         Text(hintText)
                             .font(.system(size: 14, weight: .bold, design: .rounded))
                             .foregroundColor(.gray.opacity(0.9))
                         
-                        // 資料來源與法律條款
+                        // 3. 資料來源與法律條款
                         VStack(spacing: 10) {
                             Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
                                 .font(.system(size: 12, weight: .bold))
@@ -395,7 +335,8 @@ struct ContentView: View {
                                 }
                             }
                         }
-                        .padding(.bottom, 50)
+                        .padding(.bottom, geometry.safeAreaInsets.bottom > 0 ? 0 : 20)
+                        .layoutPriority(1)
                     }
                     .padding(.bottom, 10)
                 }
@@ -408,37 +349,42 @@ struct ContentView: View {
                         .zIndex(100)
                 }
                 
-                // 🔥 家長鎖視窗 (Parental Gate)
+                // 家長鎖視窗
                 if showParentalGate {
                     ParentalGateView(isPresented: $showParentalGate) {
-                        // 驗證成功後，開啟付費牆
                         showPaywall = true
                     }
                     .zIndex(200)
                 }
             }
-            .sheet(isPresented: $showHistory) { HistoryView(isPresented: $showHistory, language: selectedLanguage) }
-            .sheet(isPresented: $showPrivacy) { LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy) }
-            .sheet(isPresented: $showEULA) { LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA) }
-            
-            // 🔥 付費牆 + 法律連結
+            .sheet(isPresented: $showHistory) {
+                HistoryView(isPresented: $showHistory, language: selectedLanguage)
+                    .navigationViewStyle(.stack)
+            }
+            .sheet(isPresented: $showPrivacy) {
+                LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy)
+                    .navigationViewStyle(.stack)
+            }
+            .sheet(isPresented: $showEULA) {
+                LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA)
+                    .navigationViewStyle(.stack)
+            }
             .sheet(isPresented: $showPaywall) {
                 VStack(spacing: 0) {
                     PaywallView(displayCloseButton: true)
                         .onPurchaseCompleted { customerInfo in
-                            self.isPro = customerInfo.entitlements["pro"]?.isActive == true
+                            subManager.checkSubscriptionStatus()
                             self.showPaywall = false
                             print("🎉 購買成功！")
                         }
                         .onRestoreCompleted { customerInfo in
-                            self.isPro = customerInfo.entitlements["pro"]?.isActive == true
-                            if self.isPro {
+                            subManager.checkSubscriptionStatus()
+                            if subManager.isPro {
                                 self.showPaywall = false
                                 print("🎉 恢復購買成功！")
                             }
                         }
                     
-                    // Apple 強制要求：訂閱頁面下方必須有 Privacy 和 EULA 連結
                     HStack(spacing: 20) {
                         Link("Privacy Policy", destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")!)
                             .font(.caption)
@@ -453,7 +399,6 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background {
-                print("💤 App 進入背景，重置自我介紹記憶")
                 hasPlayedChineseIntro = false
                 hasPlayedEnglishIntro = false
             }
@@ -462,34 +407,108 @@ struct ContentView: View {
             SpeechService.shared.requestAuthorization()
             updateContentData()
             checkServerStatus()
+            subManager.checkSubscriptionStatus()
+        }
+    }
+    
+    // MARK: - 輔助 View 函數
+    
+    func renderChineseContent(proxy: ScrollViewProxy) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
+            ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
+                VStack(spacing: 0) {
+                    if !item.bopomofo.isEmpty {
+                        Text(item.bopomofo)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.6))
+                            .fixedSize()
+                    }
+                    Text(item.char)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.5))
+                }
+                .id(index)
+                .frame(minWidth: 38)
+                .scaleEffect(index == currentWordIndex - 1 ? 1.2 : 1.0)
+                .animation(.spring(response: 0.3), value: currentWordIndex)
+            }
+        }
+        .padding()
+        .onChange(of: currentWordIndex) { _, newIndex in
+            if newIndex > 0 && !isUserScrolling {
+                withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
+            }
+        }
+    }
+    
+    func renderEnglishContent(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 12) {
+            ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
+                let isActive = (index == currentSentenceIndex)
+                Text(sentence)
+                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
+                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
+                    .multilineTextAlignment(.leading)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(isActive ? Color.white : Color.white.opacity(0.5))
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
+                    .scaleEffect(isActive ? 1.02 : 1.0)
+                    .animation(.spring(), value: isActive)
+                    .id("Sentence-\(index)")
+                    .onTapGesture { isUserScrolling = true }
+            }
             
-            Purchases.shared.getCustomerInfo { (info, error) in
-                if let info = info {
-                    self.isPro = info.entitlements["pro"]?.isActive == true
-                    print("👀 current entitlements:", info.entitlements.all.keys)
+            if englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
+                Image(systemName: "chevron.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.MagicBlue.opacity(0.6))
+                    .padding(.bottom, 10)
+                    .opacity(isPlaying ? 0 : 1)
+            }
+        }
+        .padding()
+        .padding(.bottom, 40)
+        .onChange(of: currentSentenceIndex) { _, newIndex in
+            if !isUserScrolling {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
                 }
             }
         }
     }
     
-    // MARK: - 邏輯區
+    func focusButton(proxy: ScrollViewProxy) -> some View {
+        Button(action: {
+            isUserScrolling = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring()) {
+                    if selectedLanguage == .english {
+                        proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
+                    } else {
+                        proxy.scrollTo(currentWordIndex, anchor: .center)
+                    }
+                }
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "location.fill")
+                Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
+            }
+            .padding(8)
+            .background(Color.MagicBlue)
+            .foregroundColor(.white)
+            .cornerRadius(20)
+            .shadow(radius: 3)
+        }
+        .padding(12)
+        .transition(.scale.combined(with: .opacity))
+    }
     
-    // 🔥 新增：檢查免費額度邏輯 (每日 3 次)
+    // MARK: - 邏輯 Function
     func checkFreeQuota() -> Bool {
-        if isPro { return true } // 付費會員無限制
-        
-        let calendar = Calendar.current
-        let today = Date()
-        
-        // 從歷史紀錄算今天有幾筆
-        let todayCount = HistoryManager.shared.history.filter { item in
-            return calendar.isDate(item.date, inSameDayAs: today)
-        }.count
-        
-        let freeLimit = 3
-        print("📊 今天已使用次數: \(todayCount) / \(freeLimit)")
-        
-        return todayCount < freeLimit
+        return subManager.checkUserQuota()
     }
     
     func updateContentData() {
@@ -519,11 +538,16 @@ struct ContentView: View {
         }
     }
     
-    func interruptAndListen() {
+    // 🔥 關鍵修正：只停止播放，不觸發錄音
+    func stopSpeaking() {
         stopAudio()
         isThinking = false
-        userSpokenText = "..."
-        startListening()
+        // 不呼叫 startListening()，讓它回到靜止狀態，讓使用者決定下一步
+    }
+    
+    // 舊的函式 (如果還有地方用到，可保留或刪除，但上面已經改用 stopSpeaking 了)
+    func interruptAndListen() {
+        stopSpeaking()
     }
     
     func cancelThinking() {
@@ -634,18 +658,14 @@ struct ContentView: View {
         }
     }
     
-    // 🔥 修改：啟動錄音前，先檢查免費額度，再跳家長鎖
     func startListening() {
-        // 如果不是 Pro，且今天額度用完了
-        if !isPro && !checkFreeQuota() {
-            // 顯示提示文字
+        if !subManager.isPro && !checkFreeQuota() {
             if selectedLanguage == .chinese {
                 userSpokenText = "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
             } else {
                 userSpokenText = "🔒 Free quota used up today!\nAsk parents to unlock."
             }
             
-            // 稍微延遲一下，讓使用者看到上面的字，再跳出家長鎖
             DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
                 showParentalGate = true
             }
@@ -817,7 +837,8 @@ struct ContentView: View {
     }
 }
 
-// 家長鎖視窗 (深色模式修正版)
+// MARK: - 輔助元件與擴充
+
 struct ParentalGateView: View {
     @Binding var isPresented: Bool
     var onSuccess: () -> Void
@@ -887,7 +908,6 @@ struct ParentalGateView: View {
     }
 }
 
-// 輔助元件
 struct LoadingCoverView: View {
     @State private var isRotating = false
     var body: some View {
