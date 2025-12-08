@@ -190,7 +190,6 @@ struct ContentView: View {
         .sheet(isPresented: $showPaywall) {
             paywallContent()
         }
-        // 🔥 修正 iOS 17 deprecated warning
         .onChange(of: scenePhase) { oldPhase, newPhase in
             if newPhase == .background {
                 hasPlayedChineseIntro = false
@@ -327,7 +326,6 @@ struct ContentView: View {
         }
     }
     
-    // 3. 對話/文字閱讀區 (🔥 已修正：補回 lastQuestion 的顯示)
     @ViewBuilder
     func conversationArea(geometry: GeometryProxy, isLandscape: Bool) -> some View {
         ScrollViewReader { proxy in
@@ -346,25 +344,24 @@ struct ContentView: View {
                             .frame(maxWidth: .infinity, alignment: .center)
                             .id("UserText")
                     } else {
-                        // AI 回答區
-                        VStack(alignment: .leading, spacing: 10) {
-                            
-                            // 🔥 家長驗收區：極簡顯示小朋友問了什麼
+                        VStack(alignment: .leading, spacing: 12) {
                             if !lastQuestion.isEmpty {
                                 HStack(spacing: 6) {
                                     Text(selectedLanguage == .chinese ? "問：" : "Q:")
                                         .font(.caption)
-                                        .foregroundColor(.gray)
+                                        .fontWeight(.bold)
+                                        .foregroundColor(.orange)
                                     
                                     Text(lastQuestion)
-                                        .font(.system(size: 16, weight: .medium, design: .rounded))
-                                        .foregroundColor(.secondary)
+                                        .font(.body)
+                                        .foregroundColor(.primary)
                                 }
                                 .padding(.horizontal)
-                                .padding(.top, 4)
+                                .padding(.top, 10)
+                                Divider().padding(.horizontal)
                             }
                             
-                            // 顯示 AI 回答內容
+                            // 🔥 修正：渲染內容
                             if selectedLanguage == .chinese {
                                 renderChineseContent(proxy: proxy)
                             } else {
@@ -518,101 +515,6 @@ struct ContentView: View {
         }
     }
     
-    // MARK: - 輔助 View 函數 (🔥 這是之前遺失的部分)
-    
-    func renderChineseContent(proxy: ScrollViewProxy) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
-            ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
-                VStack(spacing: 0) {
-                    if !item.bopomofo.isEmpty {
-                        Text(item.bopomofo)
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.6))
-                            .fixedSize()
-                    }
-                    Text(item.char)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .foregroundColor(index < currentWordIndex ? .MagicBlue : .gray.opacity(0.5))
-                }
-                .id(index)
-                .frame(minWidth: 38)
-                .scaleEffect(index == currentWordIndex - 1 ? 1.2 : 1.0)
-                .animation(.spring(response: 0.3), value: currentWordIndex)
-            }
-        }
-        .padding()
-        .onChange(of: currentWordIndex) { _, newIndex in
-            if newIndex > 0 && !isUserScrolling {
-                withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
-            }
-        }
-    }
-    
-    func renderEnglishContent(proxy: ScrollViewProxy) -> some View {
-        VStack(spacing: 12) {
-            ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
-                let isActive = (index == currentSentenceIndex)
-                Text(sentence)
-                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
-                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
-                    .multilineTextAlignment(.leading)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(isActive ? Color.white : Color.white.opacity(0.5))
-                    .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
-                    .scaleEffect(isActive ? 1.02 : 1.0)
-                    .animation(.spring(), value: isActive)
-                    .id("Sentence-\(index)")
-                    .onTapGesture { isUserScrolling = true }
-            }
-            
-            if englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
-                Image(systemName: "chevron.down.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.MagicBlue.opacity(0.6))
-                    .padding(.bottom, 10)
-                    .opacity(isPlaying ? 0 : 1)
-            }
-        }
-        .padding()
-        .padding(.bottom, 40)
-        .onChange(of: currentSentenceIndex) { _, newIndex in
-            if !isUserScrolling {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
-                }
-            }
-        }
-    }
-    
-    func focusButton(proxy: ScrollViewProxy) -> some View {
-        Button(action: {
-            isUserScrolling = false
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                withAnimation(.spring()) {
-                    if selectedLanguage == .english {
-                        proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
-                    } else {
-                        proxy.scrollTo(currentWordIndex, anchor: .center)
-                    }
-                }
-            }
-        }) {
-            HStack(spacing: 4) {
-                Image(systemName: "location.fill")
-                Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
-            }
-            .padding(8)
-            .background(Color.MagicBlue)
-            .foregroundColor(.white)
-            .cornerRadius(20)
-            .shadow(radius: 3)
-        }
-        .padding(12)
-        .transition(.scale.combined(with: .opacity))
-    }
-    
     // MARK: - 邏輯 Function
     
     func switchLanguage(to lang: AppLanguage) {
@@ -630,7 +532,24 @@ struct ContentView: View {
         updateContentData()
     }
     
+    func triggerPaywall() {
+        if selectedLanguage == .chinese {
+            userSpokenText = "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
+        } else {
+            userSpokenText = "🔒 Free quota used up today!\nAsk parents to unlock."
+        }
+        
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            showParentalGate = true
+        }
+    }
+    
     func askExplainAgain() {
+        if !subManager.isPro && !checkFreeQuota() {
+            triggerPaywall()
+            return
+        }
+        
         if lastQuestion.isEmpty {
             let needsIntro = (selectedLanguage == .chinese && !hasPlayedChineseIntro) ||
                              (selectedLanguage == .english && !hasPlayedEnglishIntro)
@@ -792,15 +711,7 @@ struct ContentView: View {
     
     func startListening() {
         if !subManager.isPro && !checkFreeQuota() {
-            if selectedLanguage == .chinese {
-                userSpokenText = "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
-            } else {
-                userSpokenText = "🔒 Free quota used up today!\nAsk parents to unlock."
-            }
-            
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                showParentalGate = true
-            }
+            triggerPaywall()
             return
         }
         
@@ -950,7 +861,7 @@ struct ContentView: View {
                     }
                 } else {
                     timer.invalidate()
-                    self.currentWordIndex = totalChars
+                    self.currentWordIndex = totalChars // 播放結束時顯示所有字
                     self.isPlaying = false
                 }
             }
@@ -966,6 +877,107 @@ struct ContentView: View {
         textTimer?.invalidate()
         textTimer = nil
         isPlaying = false
+    }
+    
+    // 🔥 核心修正：正確的渲染邏輯
+    func renderChineseContent(proxy: ScrollViewProxy) -> some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
+            ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
+                VStack(spacing: 0) {
+                    // 如果沒有在播放 (isPlaying == false)，就全部顯示
+                    // 如果正在播放，則只顯示到 currentWordIndex
+                    let shouldShow = !isPlaying || index < currentWordIndex
+                    
+                    if !item.bopomofo.isEmpty {
+                        Text(item.bopomofo)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.6))
+                            .fixedSize()
+                    }
+                    Text(item.char)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.5))
+                }
+                .id(index)
+                .frame(minWidth: 38)
+                .scaleEffect(isPlaying && index == currentWordIndex - 1 ? 1.2 : 1.0)
+                .animation(.spring(response: 0.3), value: currentWordIndex)
+            }
+        }
+        .padding()
+        .onChange(of: currentWordIndex) { _, newIndex in
+            if newIndex > 0 && !isUserScrolling {
+                withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
+            }
+        }
+    }
+    
+    func renderEnglishContent(proxy: ScrollViewProxy) -> some View {
+        VStack(spacing: 12) {
+            ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
+                // 如果沒有在播放，顯示正常顏色
+                // 如果在播放，且是當前句子，顯示高亮
+                let isActive = isPlaying && (index == currentSentenceIndex)
+                
+                Text(sentence)
+                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
+                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
+                    .multilineTextAlignment(.leading)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(isActive ? Color.white : Color.white.opacity(0.5))
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
+                    .scaleEffect(isActive ? 1.02 : 1.0)
+                    .animation(.spring(), value: isActive)
+                    .id("Sentence-\(index)")
+                    .onTapGesture { isUserScrolling = true }
+            }
+            
+            if englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
+                Image(systemName: "chevron.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.MagicBlue.opacity(0.6))
+                    .padding(.bottom, 10)
+                    .opacity(isPlaying ? 0 : 1)
+            }
+        }
+        .padding()
+        .padding(.bottom, 40)
+        .onChange(of: currentSentenceIndex) { _, newIndex in
+            if !isUserScrolling {
+                withAnimation(.easeInOut(duration: 0.5)) {
+                    proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
+                }
+            }
+        }
+    }
+    
+    func focusButton(proxy: ScrollViewProxy) -> some View {
+        Button(action: {
+            isUserScrolling = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                withAnimation(.spring()) {
+                    if selectedLanguage == .english {
+                        proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
+                    } else {
+                        proxy.scrollTo(currentWordIndex, anchor: .center)
+                    }
+                }
+            }
+        }) {
+            HStack(spacing: 4) {
+                Image(systemName: "location.fill")
+                Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
+            }
+            .padding(8)
+            .background(Color.MagicBlue)
+            .foregroundColor(.white)
+            .cornerRadius(20)
+            .shadow(radius: 3)
+        }
+        .padding(12)
+        .transition(.scale.combined(with: .opacity))
     }
 }
 
