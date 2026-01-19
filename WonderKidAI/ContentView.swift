@@ -14,6 +14,12 @@ struct ContentView: View {
     @State private var selectedLanguage: AppLanguage = .chinese
     @State private var aiResponse: String = ""
     
+    // 預熱標記
+    @State private var didPrewarm = false
+    
+    // 新增 isLandscape 狀態
+    @State private var isLandscape: Bool = false
+    
     // 初始化語言設定
     init() {
         let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
@@ -62,13 +68,28 @@ struct ContentView: View {
     
     var body: some View {
         GeometryReader { geometry in
-            // 🔥 1. 自動判斷佈局
-            let isLandscape = geometry.size.width > geometry.size.height
+            // 計算當前佈局方向
+            let computedIsLandscape = geometry.size.width > geometry.size.height
+            
+            // 當幀大小變化時更新 isLandscape 狀態，使用動畫
+            Color.clear
+                .onAppear {
+                    isLandscape = computedIsLandscape
+                }
+                .onChange(of: geometry.size) { newSize in
+                    let newIsLandscape = newSize.width > newSize.height
+                    if newIsLandscape != isLandscape {
+                        withAnimation(.easeInOut(duration: 0.35)) {
+                            isLandscape = newIsLandscape
+                        }
+                    }
+                }
+            
             // 🔥 2. 判斷是否為 iPad
             let isPad = UIDevice.current.userInterfaceIdiom == .pad
             
+            // --- 背景層 (共用) ---
             ZStack {
-                // --- 背景層 (共用) ---
                 Image("KnowledgeBackground")
                     .resizable()
                     .scaledToFill()
@@ -76,6 +97,7 @@ struct ContentView: View {
                     .clipped()
                     .ignoresSafeArea()
                     .opacity(0.3)
+                    .zIndex(0)
                 
                 LinearGradient(
                     gradient: Gradient(colors: [Color.white.opacity(0.85), Color.SoftBlue.opacity(0.6)]),
@@ -83,8 +105,10 @@ struct ContentView: View {
                     endPoint: .bottom
                 )
                 .ignoresSafeArea()
-                
-                // --- 前景內容層 ---
+                .zIndex(0)
+            }
+            
+            Group {
                 if isLandscape {
                     // 🟢 橫向模式 (iPhone & iPad)
                     HStack(spacing: 0) {
@@ -157,8 +181,38 @@ struct ContentView: View {
                     }
                 }
             }
-            // --- 彈出視窗與 Overlay ---
+            .transition(.opacity.combined(with: .scale))
             .blur(radius: (isServerConnected == nil || showParentalGate) ? 5 : 0)
+            // Group 不設 zIndex，保持在背景上
+            
+            // 預熱用隱藏組件
+            if !didPrewarm {
+                VStack(spacing: 0) {
+                    // 預熱圖片（decode）for both orientations
+                    Image("KnowledgeBackground").resizable().frame(width: 1, height: 1).hidden()
+                    // 預熱 LazyVGrid (橫式/直式)
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 38))], spacing: 2) {
+                        Text("PrewarmZH").font(.system(size: 18)).foregroundColor(.clear).frame(width: 38, height: 38)
+                    }.frame(height: 1).hidden()
+                    // 預熱大 VStack (直式)
+                    VStack {
+                        Text("DummyZH").font(.system(size: 26, weight: .bold, design: .rounded)).foregroundColor(.clear)
+                        HStack {
+                            Text("DummyEN1").font(.system(size: 20, weight: .bold, design: .rounded)).foregroundColor(.clear)
+                            Text("DummyEN2").font(.system(size: 18)).foregroundColor(.clear)
+                        }
+                    }.frame(width: 300, height: 200).hidden()
+                    // 預熱 HStack (橫式)
+                    HStack {
+                        Rectangle().fill(Color.clear).frame(width: 200, height: 70)
+                        Spacer(minLength: 30)
+                        Text("hstack").foregroundColor(.clear)
+                    }.frame(width: 400).hidden()
+                }
+                .onAppear {
+                    didPrewarm = true
+                }
+            }
             
             // 載入遮罩
             if isServerConnected == nil {
@@ -190,7 +244,7 @@ struct ContentView: View {
         .sheet(isPresented: $showPaywall) {
             paywallContent()
         }
-        .onChange(of: scenePhase) { oldPhase, newPhase in
+        .onChange(of: scenePhase) { newPhase in
             if newPhase == .background {
                 hasPlayedChineseIntro = false
                 hasPlayedEnglishIntro = false
@@ -201,6 +255,12 @@ struct ContentView: View {
             updateContentData()
             checkServerStatus()
             subManager.checkSubscriptionStatus()
+            
+            if !didPrewarm {
+                // 預熱圖片 decode (will happen by loading Image above)
+                // 預熱文字與 LazyVGrid layout pipeline由body中hidden組件觸發
+                didPrewarm = true
+            }
         }
     }
     
@@ -361,11 +421,29 @@ struct ContentView: View {
                                 Divider().padding(.horizontal)
                             }
                             
-                            // 🔥 修正：渲染內容
+                            // 🔥 修改：呼叫新的獨立組件
                             if selectedLanguage == .chinese {
-                                renderChineseContent(proxy: proxy)
+                                ChineseContentView(
+                                    characterData: characterData,
+                                    isPlaying: isPlaying,
+                                    currentWordIndex: currentWordIndex,
+                                    isUserScrolling: isUserScrolling,
+                                    onScrollTo: { index in
+                                        withAnimation { proxy.scrollTo(index, anchor: .center) }
+                                    }
+                                )
                             } else {
-                                renderEnglishContent(proxy: proxy)
+                                EnglishContentView(
+                                    englishSentences: englishSentences,
+                                    isPlaying: isPlaying,
+                                    currentSentenceIndex: currentSentenceIndex,
+                                    isUserScrolling: isUserScrolling,
+                                    onScrollTo: { index in
+                                        withAnimation(.easeInOut(duration: 0.5)) {
+                                            proxy.scrollTo("Sentence-\(index)", anchor: .center)
+                                        }
+                                    }
+                                )
                             }
                         }
                     }
@@ -518,17 +596,26 @@ struct ContentView: View {
     // MARK: - 邏輯 Function
     
     func switchLanguage(to lang: AppLanguage) {
-        let cnGreeting = "嗨！我是安安老師～\n小朋友你想知道什麼呢？"
-        let enGreeting = "Hi! I am Teacher An-An.\nWhat would you like to know?"
+        // 設定長版 intro，清空內容資料及相關狀態
+        let cnIntro = "嗨！我是安安老師，你的第一本 AI 百科全書。如果有自然、數學、地理、天文、語文、歷史，或是日常生活的問題，都可以問我喔！"
+        let enIntro = "Hello! I am Teacher An-An, your first AI encyclopedia. You can ask me about nature, math, geography, space, history, or anything in your daily life. I am here to help you!"
         
-        if aiResponse == cnGreeting || aiResponse == enGreeting || aiResponse.isEmpty {
-            if lang == .chinese {
-                aiResponse = cnGreeting
-            } else {
-                aiResponse = enGreeting
-            }
-        }
+        aiResponse = (lang == .chinese) ? cnIntro : enIntro
+        characterData = []
+        englishSentences = []
+        userSpokenText = ""
+        lastQuestion = ""
+        isThinking = false
+        isRecording = false
+        isPreparingRecording = false
+        isPlaying = false
+        stopAudio()
+        currentTask?.cancel()
+        currentTask = nil
+        currentWordIndex = 0
+        currentSentenceIndex = 0
         selectedLanguage = lang
+        
         updateContentData()
     }
     
@@ -793,6 +880,7 @@ struct ContentView: View {
                         language: selectedLanguage == .chinese ? "zh-TW" : "en-US"
                     )
                     
+                    aiResponse = ""
                     aiResponse = answer
                     currentWordIndex = 0
                     currentSentenceIndex = 0
@@ -879,80 +967,6 @@ struct ContentView: View {
         isPlaying = false
     }
     
-    // 🔥 核心修正：正確的渲染邏輯
-    func renderChineseContent(proxy: ScrollViewProxy) -> some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
-            ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
-                VStack(spacing: 0) {
-                    // 如果沒有在播放 (isPlaying == false)，就全部顯示
-                    // 如果正在播放，則只顯示到 currentWordIndex
-                    let shouldShow = !isPlaying || index < currentWordIndex
-                    
-                    if !item.bopomofo.isEmpty {
-                        Text(item.bopomofo)
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.6))
-                            .fixedSize()
-                    }
-                    Text(item.char)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.5))
-                }
-                .id(index)
-                .frame(minWidth: 38)
-                .scaleEffect(isPlaying && index == currentWordIndex - 1 ? 1.2 : 1.0)
-                .animation(.spring(response: 0.3), value: currentWordIndex)
-            }
-        }
-        .padding()
-        .onChange(of: currentWordIndex) { _, newIndex in
-            if newIndex > 0 && !isUserScrolling {
-                withAnimation { proxy.scrollTo(newIndex, anchor: .center) }
-            }
-        }
-    }
-    
-    func renderEnglishContent(proxy: ScrollViewProxy) -> some View {
-        VStack(spacing: 12) {
-            ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
-                // 如果沒有在播放，顯示正常顏色
-                // 如果在播放，且是當前句子，顯示高亮
-                let isActive = isPlaying && (index == currentSentenceIndex)
-                
-                Text(sentence)
-                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
-                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
-                    .multilineTextAlignment(.leading)
-                    .padding()
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(isActive ? Color.white : Color.white.opacity(0.5))
-                    .cornerRadius(16)
-                    .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
-                    .scaleEffect(isActive ? 1.02 : 1.0)
-                    .animation(.spring(), value: isActive)
-                    .id("Sentence-\(index)")
-                    .onTapGesture { isUserScrolling = true }
-            }
-            
-            if englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
-                Image(systemName: "chevron.down.circle.fill")
-                    .font(.system(size: 24))
-                    .foregroundColor(.MagicBlue.opacity(0.6))
-                    .padding(.bottom, 10)
-                    .opacity(isPlaying ? 0 : 1)
-            }
-        }
-        .padding()
-        .padding(.bottom, 40)
-        .onChange(of: currentSentenceIndex) { _, newIndex in
-            if !isUserScrolling {
-                withAnimation(.easeInOut(duration: 0.5)) {
-                    proxy.scrollTo("Sentence-\(newIndex)", anchor: .center)
-                }
-            }
-        }
-    }
-    
     func focusButton(proxy: ScrollViewProxy) -> some View {
         Button(action: {
             isUserScrolling = false
@@ -978,6 +992,91 @@ struct ContentView: View {
         }
         .padding(12)
         .transition(.scale.combined(with: .opacity))
+    }
+}
+
+// MARK: - 新增獨立中文內容視圖
+struct ChineseContentView: View {
+    let characterData: [(char: String, bopomofo: String)]
+    let isPlaying: Bool
+    let currentWordIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+    
+    var body: some View {
+        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
+            ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
+                VStack(spacing: 0) {
+                    let shouldShow = !isPlaying || index < currentWordIndex
+                    
+                    if !item.bopomofo.isEmpty {
+                        Text(item.bopomofo)
+                            .font(.system(size: 10, weight: .regular))
+                            .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.6))
+                            .fixedSize()
+                    }
+                    Text(item.char)
+                        .font(.system(size: 26, weight: .bold, design: .rounded))
+                        .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.5))
+                }
+                .id(index)
+                .frame(minWidth: 38)
+                .scaleEffect(isPlaying && index == currentWordIndex - 1 ? 1.2 : 1.0)
+                .animation(isPlaying && index == currentWordIndex - 1 ? .spring(response: 0.3) : .none, value: isPlaying ? currentWordIndex : 0)
+            }
+        }
+        .padding()
+        .onChange(of: currentWordIndex) { newIndex in
+            if newIndex > 0 && !isUserScrolling {
+                onScrollTo(newIndex)
+            }
+        }
+    }
+}
+
+// MARK: - 新增獨立英文內容視圖
+struct EnglishContentView: View {
+    let englishSentences: [String]
+    let isPlaying: Bool
+    let currentSentenceIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
+                let isActive = isPlaying && (index == currentSentenceIndex)
+                
+                Text(sentence)
+                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
+                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
+                    .multilineTextAlignment(.leading)
+                    .padding()
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(isActive ? Color.white : Color.white.opacity(0.5))
+                    .cornerRadius(16)
+                    .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
+                    .scaleEffect(isActive ? 1.02 : 1.0)
+                    .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
+                    .id("Sentence-\(index)")
+                    .onTapGesture {  }
+            }
+            
+            if englishSentences.count > 2 && currentSentenceIndex < englishSentences.count - 1 && !isUserScrolling {
+                Image(systemName: "chevron.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.MagicBlue.opacity(0.6))
+                    .padding(.bottom, 10)
+                    .opacity(isPlaying ? 0 : 1)
+            }
+        }
+        .padding()
+        .padding(.bottom, 40)
+        .onChange(of: currentSentenceIndex) { newIndex in
+            if !isUserScrolling {
+                onScrollTo(newIndex)
+            }
+        }
     }
 }
 
@@ -1134,3 +1233,4 @@ extension String {
         return text
     }
 }
+
