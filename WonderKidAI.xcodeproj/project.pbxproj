@@ -9,6 +9,10 @@
 /* Begin PBXBuildFile section */
 		4C3577FD2EDFCC7B00428D23 /* RevenueCat in Frameworks */ = {isa = PBXBuildFile; productRef = 4C3577FC2EDFCC7B00428D23 /* RevenueCat */; };
 		4C3577FF2EDFCC7B00428D23 /* RevenueCatUI in Frameworks */ = {isa = PBXBuildFile; productRef = 4C3577FE2EDFCC7B00428D23 /* RevenueCatUI */; };
+		4C6B3DE82F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C6B3DE72F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md */; };
+		4C6B3DEA2F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C6B3DE92F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md */; };
+		4C6B3DEC2F1E64DE00B6965A /* FuriganaText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6B3DEB2F1E64DE00B6965A /* FuriganaText.swift */; };
+		4C6B3DEE2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C6B3DED2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -29,6 +33,10 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		4C6B3DE72F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = INTRO_BUTTON_FEATURE.md; sourceTree = "<group>"; };
+		4C6B3DE92F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = THREE_OPTIMIZATIONS_COMPLETE.md; sourceTree = "<group>"; };
+		4C6B3DEB2F1E64DE00B6965A /* FuriganaText.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FuriganaText.swift; sourceTree = "<group>"; };
+		4C6B3DED2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = FURIGANA_IMPLEMENTATION.md; sourceTree = "<group>"; };
 		4C9451252EDD73FA00A785B8 /* WonderKidAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WonderKidAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C9451322EDD73FB00A785B8 /* WonderKidAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WonderKidAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C94513C2EDD73FB00A785B8 /* WonderKidAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WonderKidAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -99,6 +107,10 @@
 				4C9451352EDD73FB00A785B8 /* WonderKidAITests */,
 				4C94513F2EDD73FB00A785B8 /* WonderKidAIUITests */,
 				4C9451262EDD73FA00A785B8 /* Products */,
+				4C6B3DE72F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md */,
+				4C6B3DE92F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md */,
+				4C6B3DEB2F1E64DE00B6965A /* FuriganaText.swift */,
+				4C6B3DED2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -237,6 +249,9 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4C6B3DE82F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md in Resources */,
+				4C6B3DEA2F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md in Resources */,
+				4C6B3DEE2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -261,6 +276,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4C6B3DEC2F1E64DE00B6965A /* FuriganaText.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

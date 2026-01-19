@@ -31,7 +31,7 @@ struct LegalView: View {
                             HStack {
                                 Image(systemName: "link.circle.fill")
                                     .font(.system(size: 20))
-                                Text(language == .chinese ? "點此閱讀完整 Apple EULA 條款" : "Read Full Apple EULA")
+                                Text(language == .chinese ? "點此閱讀完整 Apple EULA 條款" : (language == .japanese ? "Apple EULA全文を読む" : "Read Full Apple EULA"))
                                     .fontWeight(.bold)
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
@@ -49,7 +49,7 @@ struct LegalView: View {
                             HStack {
                                 Image(systemName: "hand.raised.fill")
                                     .font(.system(size: 20))
-                                Text(language == .chinese ? "線上查看完整隱私權政策" : "View Privacy Policy Online")
+                                Text(language == .chinese ? "線上查看完整隱私權政策" : (language == .japanese ? "オンラインで全文を読む" : "View Privacy Policy Online"))
                                     .fontWeight(.bold)
                                 Spacer()
                                 Image(systemName: "arrow.up.right.square")
@@ -88,15 +88,24 @@ struct LegalView: View {
     func getTitle() -> String {
         switch type {
         case .privacy:
-            return language == .chinese ? "隱私權政策" : "Privacy Policy"
+            switch language {
+            case .chinese: return "隱私權政策"
+            case .english: return "Privacy Policy"
+            case .japanese: return "プライバシーポリシー"
+            }
         case .eula:
-            return language == .chinese ? "使用者授權協定" : "EULA"
+            switch language {
+            case .chinese: return "使用者授權協定"
+            case .english: return "EULA"
+            case .japanese: return "利用規約"
+            }
         }
     }
     
     func getContent() -> String {
         if type == .privacy {
-            if language == .chinese {
+            switch language {
+            case .chinese:
                 return """
                 【隱私權政策摘要】
                 
@@ -116,7 +125,7 @@ struct LegalView: View {
                 3. 聯絡我們
                 - 如果您對隱私權有任何疑問，請聯繫開發者：eric1207cvb@msn.com
                 """
-            } else {
+            case .english:
                 return """
                 [Privacy Policy Summary]
                 
@@ -136,10 +145,31 @@ struct LegalView: View {
                 3. Contact
                 - If you have questions, please contact the developer: eric1207cvb@msn.com
                 """
+            case .japanese:
+                return """
+                【プライバシーポリシー概要】
+                
+                最終更新日：2025年12月
+                
+                WonderKidAI（以下「本アプリ」）は、お客様のプライバシーを非常に重視しています。本アプリは子ども向けに設計されており、COPPA（児童オンラインプライバシー保護法）を遵守します。
+                
+                1. データ収集
+                - 個人を特定できる情報（氏名、住所、電話番号）は一切収集しません。
+                - 音声と画像データはリアルタイムAI分析のみに使用され、処理後は直ちに破棄されます。
+                - 会話履歴はすべてお客様のデバイス内にのみ保存されます。
+                
+                2. AI技術の使用
+                - 本アプリはOpenAI APIを使用しています。
+                - すべてのデータ送信は暗号化されています。
+                
+                3. お問い合わせ
+                - プライバシーに関するご質問は開発者までご連絡ください：eric1207cvb@msn.com
+                """
             }
         } else {
             // EULA
-            if language == .chinese {
+            switch language {
+            case .chinese:
                 return """
                 【標準使用者授權合約 (EULA)】
                 
@@ -150,7 +180,7 @@ struct LegalView: View {
                 3. 您同意遵守所有適用的第三方合約條款。
                 4. 您承認 Apple 對本應用程式不負有維護或支援的義務。
                 """
-            } else {
+            case .english:
                 return """
                 [End User License Agreement (EULA)]
                 
@@ -159,6 +189,17 @@ struct LegalView: View {
                 1. Acknowledgment: You and the Developer acknowledge that this EULA is concluded between You and the Developer only, and not with Apple.
                 2. Developer is solely responsible for the App and its content.
                 3. No Warranty: The App is provided "as is".
+                """
+            case .japanese:
+                return """
+                【利用規約（EULA）】
+                
+                本アプリは、Apple標準利用規約（Standard EULA）に基づいて提供されます。
+                
+                1. 本契約はお客様と開発者との間の契約であり、Appleとの契約ではありません。
+                2. 開発者が本アプリのコンテンツに全責任を負います。
+                3. 本アプリは「現状有姿」で提供されます。
+                4. Appleは本アプリの保守またはサポートの義務を負いません。
                 """
             }
         }

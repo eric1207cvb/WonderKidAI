@@ -13,6 +13,7 @@ struct ContentView: View {
     
     @State private var selectedLanguage: AppLanguage = .chinese
     @State private var aiResponse: String = ""
+    @State private var localizedText: LocalizedStrings = LocalizedStrings(language: .chinese)
     
     // 預熱標記
     @State private var didPrewarm = false
@@ -23,16 +24,26 @@ struct ContentView: View {
     // 初始化語言設定
     init() {
         let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
-        let isChinese = preferredLang.hasPrefix("zh")
-        _selectedLanguage = State(initialValue: isChinese ? .chinese : .english)
-        _aiResponse = State(initialValue: isChinese ?
-            "嗨！我是安安老師～\n小朋友你想知道什麼呢？" :
-            "Hi! I am Teacher An-An.\nWhat would you like to know?")
+        
+        // 🇯🇵 支援三語：中文、英文、日文
+        let detectedLanguage: AppLanguage
+        if preferredLang.hasPrefix("zh") {
+            detectedLanguage = .chinese
+        } else if preferredLang.hasPrefix("ja") {
+            detectedLanguage = .japanese
+        } else {
+            detectedLanguage = .english
+        }
+        
+        _selectedLanguage = State(initialValue: detectedLanguage)
+        _localizedText = State(initialValue: LocalizedStrings(language: detectedLanguage))
+        _aiResponse = State(initialValue: LocalizedStrings(language: detectedLanguage).welcomeMessage)
     }
     
-    // 記憶介紹狀態
+    // 記憶介紹狀態（每種語言獨立）
     @State private var hasPlayedChineseIntro: Bool = false
     @State private var hasPlayedEnglishIntro: Bool = false
+    @State private var hasPlayedJapaneseIntro: Bool = false
     
     // 視窗控制
     @State private var showPaywall: Bool = false
@@ -246,8 +257,10 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { newPhase in
             if newPhase == .background {
+                // 退出程式時重置所有介紹狀態
                 hasPlayedChineseIntro = false
                 hasPlayedEnglishIntro = false
+                hasPlayedJapaneseIntro = false
             }
         }
         .onAppear {
@@ -276,7 +289,7 @@ struct ContentView: View {
                             Image(systemName: "clock.arrow.circlepath")
                                 .font(.system(size: 16, weight: .semibold))
                             if geometry.size.width > 380 {
-                                Text(selectedLanguage == .chinese ? "足跡" : "History")
+                                Text(localizedText.historyButton)
                                     .font(.system(size: 12, weight: .bold))
                             }
                         }
@@ -294,6 +307,9 @@ struct ContentView: View {
                     }
                     LanguageButton(title: "En", isSelected: selectedLanguage == .english) {
                         switchLanguage(to: .english)
+                    }
+                    LanguageButton(title: "日", isSelected: selectedLanguage == .japanese) {
+                        switchLanguage(to: .japanese)
                     }
                 }
                 .background(Color.white.opacity(0.9))
@@ -407,7 +423,7 @@ struct ContentView: View {
                         VStack(alignment: .leading, spacing: 12) {
                             if !lastQuestion.isEmpty {
                                 HStack(spacing: 6) {
-                                    Text(selectedLanguage == .chinese ? "問：" : "Q:")
+                                    Text(localizedText.questionLabel)
                                         .font(.caption)
                                         .fontWeight(.bold)
                                         .foregroundColor(.orange)
@@ -432,7 +448,21 @@ struct ContentView: View {
                                         withAnimation { proxy.scrollTo(index, anchor: .center) }
                                     }
                                 )
+                            } else if selectedLanguage == .japanese {
+                                // 🇯🇵 日文專用視圖（帶振假名）
+                                JapaneseContentView(
+                                    japaneseSentences: englishSentences,
+                                    isPlaying: isPlaying,
+                                    currentSentenceIndex: currentSentenceIndex,
+                                    isUserScrolling: isUserScrolling,
+                                    onScrollTo: { index in
+                                        withAnimation(.easeInOut(duration: 0.5)) {
+                                            proxy.scrollTo("Sentence-\(index)", anchor: .center)
+                                        }
+                                    }
+                                )
                             } else {
+                                // 英文視圖
                                 EnglishContentView(
                                     englishSentences: englishSentences,
                                     isPlaying: isPlaying,
@@ -507,7 +537,8 @@ struct ContentView: View {
                     Button(action: { askExplainAgain() }) {
                         VStack(spacing: 4) {
                             Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20))
-                            Text(selectedLanguage == .chinese ? "聽不懂" : "Again").font(.system(size: 10, weight: .bold))
+                            // 🔥 根據介紹狀態顯示不同文字
+                            Text(getAgainButtonText()).font(.system(size: 10, weight: .bold))
                         }
                         .foregroundColor(.white).padding(10).background(Color.MagicBlue).clipShape(Circle()).shadow(radius: 3)
                     }
@@ -522,12 +553,12 @@ struct ContentView: View {
     func footerArea(safeAreaBottom: CGFloat, isCompact: Bool) -> some View {
         if isCompact {
             HStack(spacing: 10) {
-                Text(selectedLanguage == .chinese ? "來源：維基百科" : "Source: Wikipedia")
+                Text(localizedText.dataSourceCompact)
                     .font(.system(size: 10, weight: .bold))
                     .foregroundColor(.red.opacity(0.8))
                 Text("|").font(.system(size: 10)).foregroundColor(.gray)
                 Button(action: { showPrivacy = true }) {
-                    Text(selectedLanguage == .chinese ? "隱私" : "Privacy")
+                    Text(localizedText.privacyPolicy)
                         .font(.system(size: 10, weight: .medium))
                         .underline()
                         .foregroundColor(.MagicBlue)
@@ -543,12 +574,12 @@ struct ContentView: View {
             .padding(.bottom, max(safeAreaBottom, 10))
         } else {
             VStack(spacing: 10) {
-                Text(selectedLanguage == .chinese ? "資料來源：維基百科" : "Data Source: Wikipedia")
+                Text(localizedText.dataSource)
                     .font(.system(size: 12, weight: .bold))
                     .foregroundColor(.red.opacity(0.8))
                 HStack(spacing: 15) {
                     Button(action: { showPrivacy = true }) {
-                        Text(selectedLanguage == .chinese ? "隱私權政策" : "Privacy Policy")
+                        Text(localizedText.privacyPolicy)
                             .font(.system(size: 11, weight: .medium))
                             .underline()
                             .foregroundColor(.MagicBlue)
@@ -596,11 +627,11 @@ struct ContentView: View {
     // MARK: - 邏輯 Function
     
     func switchLanguage(to lang: AppLanguage) {
-        // 設定長版 intro，清空內容資料及相關狀態
-        let cnIntro = "嗨！我是安安老師，你的第一本 AI 百科全書。如果有自然、數學、地理、天文、語文、歷史，或是日常生活的問題，都可以問我喔！"
-        let enIntro = "Hello! I am Teacher An-An, your first AI encyclopedia. You can ask me about nature, math, geography, space, history, or anything in your daily life. I am here to help you!"
+        // 更新本地化文字
+        localizedText = LocalizedStrings(language: lang)
         
-        aiResponse = (lang == .chinese) ? cnIntro : enIntro
+        // 設定長版 intro，清空內容資料及相關狀態
+        aiResponse = localizedText.introMessage
         characterData = []
         englishSentences = []
         userSpokenText = ""
@@ -620,14 +651,43 @@ struct ContentView: View {
     }
     
     func triggerPaywall() {
-        if selectedLanguage == .chinese {
-            userSpokenText = "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
-        } else {
-            userSpokenText = "🔒 Free quota used up today!\nAsk parents to unlock."
-        }
+        userSpokenText = localizedText.quotaExceeded
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
             showParentalGate = true
+        }
+    }
+    
+    // MARK: - 按鈕文字邏輯
+    
+    /// 判斷當前語言是否還沒播放過介紹
+    func needsIntro() -> Bool {
+        switch selectedLanguage {
+        case .chinese:
+            return !hasPlayedChineseIntro
+        case .english:
+            return !hasPlayedEnglishIntro
+        case .japanese:
+            return !hasPlayedJapaneseIntro
+        }
+    }
+    
+    /// 取得按鈕顯示文字（介紹 or 聽不懂）
+    func getAgainButtonText() -> String {
+        if needsIntro() {
+            // 還沒播放過介紹，顯示「介紹」
+            switch selectedLanguage {
+            case .chinese: return "介紹"
+            case .english: return "Intro"
+            case .japanese: return "紹介"
+            }
+        } else {
+            // 已經播放過介紹，顯示「聽不懂/Again/もう一度」
+            switch selectedLanguage {
+            case .chinese: return "聽不懂"
+            case .english: return "Again"
+            case .japanese: return "もう一度"
+            }
         }
     }
     
@@ -637,42 +697,22 @@ struct ContentView: View {
             return
         }
         
+        // 🔥 優先判斷：如果還沒播放過介紹，就播放介紹
+        if needsIntro() {
+            playIntroMessage()
+            return
+        }
+        
+        // 已經播放過介紹，執行原本的「聽不懂」邏輯
         if lastQuestion.isEmpty {
-            let needsIntro = (selectedLanguage == .chinese && !hasPlayedChineseIntro) ||
-                             (selectedLanguage == .english && !hasPlayedEnglishIntro)
-            
-            if needsIntro {
-                playIntroMessage()
-            } else {
-                aiResponse = selectedLanguage == .chinese ? "請按麥克風問我問題喔！" : "Please tap the mic to ask a question!"
-                updateContentData()
-            }
+            // 如果沒有問題，就再播一次介紹
+            playIntroMessage()
             return
         }
         
         let questionToAsk = lastQuestion
-        
-        let prompt = selectedLanguage == .chinese ?
-        """
-        針對小朋友剛剛的問題：「\(questionToAsk)」。
-        他表示「聽不懂」剛才的解釋。
-        請你執行以下任務：
-        1. 絕對不要重複剛才的答案。
-        2. 請改用「生活中的例子」或「童話故事的比喻」來解釋。
-        3. 語氣要更慢、更像在跟 3 歲小孩說話。
-        4. 開頭可以說：「沒關係，我們想像一下...」
-        """ :
-        """
-        Regarding the child's previous question: "\(questionToAsk)".
-        They did not understand the previous explanation.
-        Please:
-        1. Do NOT repeat the previous answer.
-        2. Use a simple real-life analogy or a story metaphor.
-        3. Speak as if to a 3-year-old.
-        4. Start with "That's okay, let's imagine..."
-        """
-        
-        userSpokenText = selectedLanguage == .chinese ? "🔄 老師，可以講簡單一點嗎？" : "🔄 Teacher, simpler please?"
+        let prompt = localizedText.simplerExplanationPrompt(for: questionToAsk)
+        userSpokenText = localizedText.simplerExplanationRequest
         sendToAI(question: prompt)
     }
     
@@ -683,7 +723,17 @@ struct ContentView: View {
     func updateContentData() {
         if selectedLanguage == .chinese {
             characterData = aiResponse.toBopomofoCharacter()
+        } else if selectedLanguage == .japanese {
+            // 🇯🇵 日文使用句子顯示（按句號、問號、驚嘆號分割）
+            let rawSentences = aiResponse
+                .replacingOccurrences(of: "。", with: "。|")
+                .replacingOccurrences(of: "？", with: "？|")
+                .replacingOccurrences(of: "！", with: "！|")
+                .split(separator: "|")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            englishSentences = rawSentences.isEmpty ? [aiResponse] : rawSentences
         } else {
+            // 英文
             let rawSentences = aiResponse
                 .replacingOccurrences(of: ". ", with: ".|")
                 .replacingOccurrences(of: "? ", with: "?|")
@@ -720,73 +770,66 @@ struct ContentView: View {
         print("🛑 使用者手動取消思考")
         currentTask?.cancel()
         isThinking = false
-        aiResponse = selectedLanguage == .chinese ? "好喔！那我先暫停～" : "Okay! Cancelled."
+        aiResponse = localizedText.cancelled
         updateContentData()
         let generator = UIImpactFeedbackGenerator(style: .medium)
         generator.impactOccurred()
     }
     
     func playIntroMessage() {
-        isThinking = true
-        let introText: String
-        if selectedLanguage == .chinese {
-            introText = "嗨！我是安安老師，你的第一本 AI 百科全書。如果有自然、數學、地理、天文、語文、歷史，或是日常生活的問題，都可以問我喔！"
-        } else {
-            introText = "Hello! I am Teacher An-An, your first AI encyclopedia. You can ask me about nature, math, geography, space, history, or anything in your daily life. I am here to help you!"
-        }
+        // 🚀 優化：自我介紹不需要顯示 "思考中" 動畫
+        let introText = localizedText.introMessage
+        userSpokenText = localizedText.firstMeeting
         
-        userSpokenText = selectedLanguage == .chinese ? "👋 初次見面！" : "👋 Hello!"
+        // 立即更新 UI，不顯示載入動畫
+        aiResponse = introText
+        updateContentData()
         
         currentTask = Task {
             do {
-                await MainActor.run {
-                    aiResponse = introText
-                    updateContentData()
-                    isThinking = false
-                }
-                
+                // 🚀 直接調用 TTS，省略 AI 處理步驟
                 let cleanText = introText.cleanForTTS()
                 let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
                 await playAudio(data: audioData, textToRead: introText)
                 
-                if selectedLanguage == .chinese { hasPlayedChineseIntro = true }
-                else { hasPlayedEnglishIntro = true }
+                // 🔥 根據當前語言設定對應的介紹狀態
+                await MainActor.run {
+                    switch selectedLanguage {
+                    case .chinese:
+                        hasPlayedChineseIntro = true
+                    case .english:
+                        hasPlayedEnglishIntro = true
+                    case .japanese:
+                        hasPlayedJapaneseIntro = true
+                    }
+                }
                 
             } catch {
-                print("Intro TTS failed")
-                isThinking = false
+                print("❌ Intro TTS failed: \(error)")
+                await MainActor.run {
+                    userSpokenText = localizedText.errorNetwork
+                }
             }
         }
     }
     
     var statusText: String {
-        if selectedLanguage == .chinese {
-            switch isServerConnected {
-            case true: return "安安老師上線中"
-            case false: return "老師休息中 (點我叫醒)"
-            default: return "正在找老師..."
-            }
-        } else {
-            switch isServerConnected {
-            case true: return "Teacher An-An is Online"
-            case false: return "Teacher is Sleeping (Tap)"
-            default: return "Connecting..."
-            }
+        switch isServerConnected {
+        case true: return localizedText.statusOnline
+        case false: return localizedText.statusOffline
+        default: return localizedText.statusConnecting
         }
     }
     
     var hintText: String {
         if isPlaying {
-            return selectedLanguage == .chinese ? "點紅色手手可以打斷老師喔！" : "Tap the red hand to interrupt!"
+            return localizedText.hintInterrupt
         }
         if isThinking {
-            return selectedLanguage == .chinese ? "點一下取消" : "Tap to cancel"
+            return localizedText.hintCancel
         }
-        if selectedLanguage == .chinese {
-            return isPreparingRecording ? "準備中..." : (isRecording ? "安安老師在聽囉..." : "點一下，開始說話")
-        } else {
-            return isPreparingRecording ? "Preparing..." : (isRecording ? "I'm listening..." : "Tap to speak")
-        }
+        return isPreparingRecording ? localizedText.hintPreparing : 
+               (isRecording ? localizedText.hintListening : localizedText.hintTapToSpeak)
     }
     
     func checkServerStatus() {
@@ -833,7 +876,7 @@ struct ContentView: View {
         do {
             try SpeechService.shared.startRecording(language: selectedLanguage)
         } catch {
-            userSpokenText = selectedLanguage == .chinese ? "❌ 啟動失敗" : "❌ Start Failed"
+            userSpokenText = localizedText.errorStart
             isPreparingRecording = false
             isRecording = false
         }
@@ -851,7 +894,7 @@ struct ContentView: View {
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.impactOccurred()
         if userSpokenText == aiListeningSymbol || userSpokenText.isEmpty || userSpokenText == "..." {
-            userSpokenText = selectedLanguage == .chinese ? "🤔 太小聲囉～" : "🤔 Too quiet~"
+            userSpokenText = localizedText.errorTooQuiet
             return
         }
         lastQuestion = userSpokenText
@@ -877,7 +920,7 @@ struct ContentView: View {
                     HistoryManager.shared.addRecord(
                         question: question,
                         answer: answer,
-                        language: selectedLanguage == .chinese ? "zh-TW" : "en-US"
+                        language: localizedText.historyLanguageCode
                     )
                     
                     aiResponse = ""
@@ -902,11 +945,7 @@ struct ContentView: View {
                     print("🚫 任務已取消，靜默處理")
                 } else {
                     await MainActor.run {
-                        if selectedLanguage == .chinese {
-                            aiResponse = "🥤 安安老師去喝口水，馬上回來～\n(請檢查網路，再試一次喔！)"
-                        } else {
-                            aiResponse = "🥤 Teacher An-An is taking a water break.\n(Please check connection and try again!)"
-                        }
+                        aiResponse = localizedText.errorNetwork
                         print("❌ 真實錯誤原因: \(error.localizedDescription)")
                         isThinking = false
                         updateContentData()
@@ -931,7 +970,23 @@ struct ContentView: View {
             
             isThinking = false
             
-            let totalChars = textToRead.count
+            // 🔥 計算實際會發音的字符數量
+            let totalChars: Int
+            if selectedLanguage == .chinese {
+                // 中文：只計算漢字和字母數字，排除標點符號和空白
+                totalChars = textToRead.filter { char in
+                    // 保留漢字（Unicode 範圍）、字母和數字
+                    let scalar = char.unicodeScalars.first!
+                    let isCJK = (0x4E00...0x9FFF).contains(scalar.value) // CJK 統一漢字
+                    let isAlphanumeric = char.isLetter || char.isNumber
+                    return isCJK || isAlphanumeric
+                }.count
+                
+                print("🎵 中文字幕同步：原始文字 \(textToRead.count) 字 → 實際發音 \(totalChars) 字")
+            } else {
+                // 英文/日文：使用原始字數
+                totalChars = textToRead.count
+            }
             
             textTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
                 guard let player = self.audioPlayer else {
@@ -941,10 +996,28 @@ struct ContentView: View {
                 
                 if player.isPlaying {
                     let percentage = player.currentTime / player.duration
-                    let charIndex = Int(Double(totalChars) * percentage)
+                    
+                    // 🔥 針對中文進行時間校正（補償 TTS 的開頭和結尾停頓）
+                    var adjustedPercentage = percentage
+                    if self.selectedLanguage == .chinese {
+                        // OpenAI TTS 中文有明顯的前後停頓
+                        // 前 8% 是開場停頓，後 8% 是結尾停頓
+                        if percentage < 0.08 {
+                            // 前段幾乎不動
+                            adjustedPercentage = 0.0
+                        } else if percentage > 0.92 {
+                            // 後段直接跳到結尾
+                            adjustedPercentage = 1.0
+                        } else {
+                            // 中間段重新映射到 0-1
+                            adjustedPercentage = (percentage - 0.08) / 0.84
+                        }
+                    }
+                    
+                    let charIndex = Int(Double(totalChars) * adjustedPercentage)
                     self.currentWordIndex = min(charIndex, totalChars)
                     
-                    if self.selectedLanguage == .english {
+                    if self.selectedLanguage == .english || self.selectedLanguage == .japanese {
                         calculateCurrentSentence(charIndex: charIndex)
                     }
                 } else {
@@ -972,7 +1045,7 @@ struct ContentView: View {
             isUserScrolling = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.spring()) {
-                    if selectedLanguage == .english {
+                    if selectedLanguage == .english || selectedLanguage == .japanese {
                         proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
                     } else {
                         proxy.scrollTo(currentWordIndex, anchor: .center)
@@ -982,7 +1055,7 @@ struct ContentView: View {
         }) {
             HStack(spacing: 4) {
                 Image(systemName: "location.fill")
-                Text(selectedLanguage == .chinese ? "唸到這" : "Focus").font(.caption).bold()
+                Text(localizedText.focusButton).font(.caption).bold()
             }
             .padding(8)
             .background(Color.MagicBlue)
@@ -1080,6 +1153,55 @@ struct EnglishContentView: View {
     }
 }
 
+// MARK: - 新增獨立日文內容視圖（使用振假名）
+struct JapaneseContentView: View {
+    let japaneseSentences: [String]
+    let isPlaying: Bool
+    let currentSentenceIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+    
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(Array(japaneseSentences.enumerated()), id: \.offset) { index, sentence in
+                let isActive = isPlaying && (index == currentSentenceIndex)
+                
+                // 🇯🇵 使用新的 FuriganaText 顯示振假名（漢字正上方）
+                FuriganaText(
+                    sentence,
+                    fontSize: isActive ? 20 : 18,
+                    fontWeight: isActive ? .bold : .regular,
+                    textColor: isActive ? .DarkText : .gray.opacity(0.7)
+                )
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isActive ? Color.white : Color.white.opacity(0.5))
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
+                .scaleEffect(isActive ? 1.02 : 1.0)
+                .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
+                .id("Sentence-\(index)")
+                .onTapGesture {  }
+            }
+            
+            if japaneseSentences.count > 2 && currentSentenceIndex < japaneseSentences.count - 1 && !isUserScrolling {
+                Image(systemName: "chevron.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.MagicBlue.opacity(0.6))
+                    .padding(.bottom, 10)
+                    .opacity(isPlaying ? 0 : 1)
+            }
+        }
+        .padding()
+        .padding(.bottom, 40)
+        .onChange(of: currentSentenceIndex) { newIndex in
+            if !isUserScrolling {
+                onScrollTo(newIndex)
+            }
+        }
+    }
+}
+
 // MARK: - 輔助元件與擴充
 
 struct ParentalGateView: View {
@@ -1153,7 +1275,19 @@ struct ParentalGateView: View {
 
 struct LoadingCoverView: View {
     @State private var isRotating = false
+    @State private var currentLanguage: AppLanguage = {
+        let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
+        if preferredLang.hasPrefix("zh") {
+            return .chinese
+        } else if preferredLang.hasPrefix("ja") {
+            return .japanese
+        } else {
+            return .english
+        }
+    }()
+    
     var body: some View {
+        let localizedText = LocalizedStrings(language: currentLanguage)
         ZStack {
             Image("KnowledgeBackground").resizable().scaledToFill().ignoresSafeArea().opacity(0.3)
             LinearGradient(gradient: Gradient(colors: [Color.white.opacity(0.95), Color.SoftBlue.opacity(0.8)]), startPoint: .top, endPoint: .bottom).ignoresSafeArea()
@@ -1161,8 +1295,8 @@ struct LoadingCoverView: View {
                 Image(systemName: "book.circle.fill").font(.system(size: 90)).foregroundColor(.MagicBlue).rotationEffect(Angle(degrees: isRotating ? 360 : 0)).animation(Animation.linear(duration: 3.0).repeatForever(autoreverses: false), value: isRotating).onAppear { isRotating = true }.shadow(color: .MagicBlue.opacity(0.3), radius: 10)
                 ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .MagicBlue)).scaleEffect(1.8)
                 VStack(spacing: 10) {
-                    Text("安安老師準備中...").font(.system(size: 22, weight: .bold, design: .rounded)).foregroundColor(.DarkText)
-                    Text("正在連接神奇魔法書櫃 📖").font(.system(size: 16, weight: .medium, design: .rounded)).foregroundColor(.gray)
+                    Text(localizedText.loadingTitle).font(.system(size: 22, weight: .bold, design: .rounded)).foregroundColor(.DarkText)
+                    Text(localizedText.loadingSubtitle).font(.system(size: 16, weight: .medium, design: .rounded)).foregroundColor(.gray)
                 }
             }
         }
@@ -1173,13 +1307,14 @@ struct ThinkingAnimationView: View {
     let language: AppLanguage
     @State private var isAnimating = false
     var body: some View {
+        let localizedText = LocalizedStrings(language: language)
         VStack(spacing: 15) {
             HStack(spacing: 8) {
                 ForEach(0..<3) { index in
                     Circle().fill(Color.MagicBlue.opacity(0.6)).frame(width: 12, height: 12).scaleEffect(isAnimating ? 1.0 : 0.5).opacity(isAnimating ? 1.0 : 0.3).animation(Animation.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.2), value: isAnimating)
                 }
             }
-            Text(language == .chinese ? "安安老師正在翻書找答案..." : "Checking the magic book...").font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.gray.opacity(0.8))
+            Text(localizedText.thinkingText).font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.gray.opacity(0.8))
         }.onAppear { isAnimating = true }
     }
 }

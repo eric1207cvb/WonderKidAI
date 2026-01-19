@@ -3,6 +3,7 @@ import Foundation
 enum AppLanguage: String {
     case chinese = "zh-TW"
     case english = "en-US"
+    case japanese = "ja-JP"  // 🇯🇵 新增日文
 }
 
 enum OpenAIError: Error, LocalizedError {
@@ -58,9 +59,12 @@ class OpenAIService {
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
-        // 雙語人設 (🔥 修改：加入語氣要求，禁止 Markdown)
-        let systemPromptText = language == .chinese ?
-                    """
+        // 🇯🇵 三語人設 (中文、英文、日文)
+        let systemPromptText: String
+        
+        switch language {
+        case .chinese:
+            systemPromptText = """
                     【最高指令】
                     1. 你是「安安老師」，一本活潑的「數位百科全書」，對象是 4-10 歲幼童。
                     2. **核心任務**：你的目標是激發好奇心，涵蓋以下領域：
@@ -78,8 +82,9 @@ class OpenAIService {
                        - 請使用自然的口語段落回答。
                     4. **互動引導**：如果小朋友只說「你好」，請主動拋出這七大領域的有趣話題。
                     5. **安全守則**：嚴禁暴力、色情。
-                    """ :
                     """
+        case .english:
+            systemPromptText = """
                     [Instructions]
                     1. You are "Teacher An-An", a digital encyclopedia for children (4-10 yo).
                     2. **Core Subjects**: Nature, Math, Geography, Astronomy, Language, History, Daily Life.
@@ -88,6 +93,31 @@ class OpenAIService {
                     5. **Engagement**: If user says "Hi", suggest a topic.
                     6. **Safety**: Strictly safe content only.
                     """
+        case .japanese:
+            systemPromptText = """
+                    【最重要なルール】
+                    1. あなたは「あんあん先生」です。4〜10歳の子ども向けのデジタル百科事典です。
+                    2. **教える分野**：次の7つの分野で子どもの好奇心を育ててください：
+                       - 🌿 **自然**：動物や植物のこと
+                       - 🔢 **算数**：数やパズルを生活の例で教える
+                       - 🌍 **地理**：国や場所、文化のこと
+                       - 🪐 **宇宙**：星や惑星、ロケットのこと
+                       - 📖 **言葉**：ことわざや単語の由来、物語
+                       - 📜 **歴史**：歴史上の人物を物語の主人公として紹介
+                       - 🎒 **日常生活**：マナー、安全、生活のルール
+                    3. **話し方のルール**：
+                       - 幼稚園の先生のように優しく、穏やかに、親しみやすく話してください。
+                       - 説明は簡単に（5歳児にもわかるように）、たとえ話を多く使ってください。
+                       - **Markdown（太字や見出し）は絶対に使わないでください**。箇条書きも使わないでください。
+                       - 自然な話し言葉で答えてください（音声合成に適した形で）。
+                    4. **振り仮名（ふりがな）のルール** ⚠️ 重要：
+                       - 小学2年生以上で習う漢字には、必ず振り仮名を付けてください。
+                       - 振り仮名の形式：漢字(ひらがな) 例：動物(どうぶつ)、地球(ちきゅう)
+                       - 小学1年生で習う漢字（例：山、川、大、小、火、水など）には振り仮名不要です。
+                    5. **会話の工夫**：子どもが「こんにちは」だけ言った時は、上記7つの分野から面白い話題を提案してください。
+                    6. **安全第一**：暴力的・性的な内容は絶対に禁止です。
+                    """
+        }
         
         var messages = history
         if messages.isEmpty {
@@ -146,7 +176,15 @@ class OpenAIService {
     // MARK: - 3. 維基百科 API
     private func fetchWikipedia(query: String, language: AppLanguage) async -> String {
         print("🌍 正在查詢維基百科: \(query)")
-        let langCode = (language == .chinese) ? "zh" : "en"
+        let langCode: String
+        switch language {
+        case .chinese:
+            langCode = "zh"
+        case .english:
+            langCode = "en"
+        case .japanese:
+            langCode = "ja"
+        }
         
         guard let encodedQuery = query.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed),
               let url = URL(string: "https://\(langCode).wikipedia.org/w/api.php?action=query&format=json&prop=extracts&exintro=true&explaintext=true&redirects=1&titles=\(encodedQuery)") else { return "Query Error" }
@@ -159,7 +197,15 @@ class OpenAIService {
                let extract = firstPage["extract"] as? String {
                 return String(extract.prefix(800))
             }
-            return (language == .chinese) ? "找不到資料" : "No information found."
+            // 🇯🇵 日文專用錯誤訊息
+            switch language {
+            case .chinese:
+                return "找不到資料"
+            case .english:
+                return "No information found."
+            case .japanese:
+                return "情報が見つかりませんでした"
+            }
         } catch { return "Network Error" }
     }
     

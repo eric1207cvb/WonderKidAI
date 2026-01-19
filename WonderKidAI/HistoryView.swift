@@ -44,8 +44,8 @@ struct HistoryView: View {
                                     
                                     Spacer()
                                     
-                                    // 顯示該筆紀錄是中文還是英文
-                                    Text(item.language == "zh-TW" ? "🇹🇼" : "🇺🇸")
+                                    // 顯示該筆紀錄是中文還是英文還是日文
+                                    Text(item.language == "zh-TW" ? "🇹🇼" : (item.language == "ja-JP" ? "🇯🇵" : "🇺🇸"))
                                         .font(.caption)
                                         .padding(4)
                                         .background(Color.gray.opacity(0.2))

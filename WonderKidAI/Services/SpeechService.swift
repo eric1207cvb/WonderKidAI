@@ -51,7 +51,17 @@ class SpeechService: NSObject {
         // 2. 播放提示音 (1113: Begin Recording)
         AudioServicesPlaySystemSound(1113)
         
-        let localeID = (language == .chinese) ? "zh-TW" : "en-US"
+        // 🇯🇵 支援三種語言
+        let localeID: String
+        switch language {
+        case .chinese:
+            localeID = "zh-TW"
+        case .english:
+            localeID = "en-US"
+        case .japanese:
+            localeID = "ja-JP"
+        }
+        
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID))
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
