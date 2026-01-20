@@ -2,6 +2,7 @@ import SwiftUI
 import AVFoundation
 import RevenueCat
 import RevenueCatUI
+import NaturalLanguage
 
 // MARK: - 主畫面 ContentView
 struct ContentView: View {
@@ -20,6 +21,10 @@ struct ContentView: View {
     
     // 新增 isLandscape 狀態
     @State private var isLandscape: Bool = false
+    
+    // 🎬 過場動畫控制
+    @State private var isAppearing: Bool = false
+    @State private var orientationTransitionID: UUID = UUID()
     
     // 初始化語言設定
     init() {
@@ -74,6 +79,11 @@ struct ContentView: View {
     // 資料源
     @State private var characterData: [(char: String, bopomofo: String)] = []
     @State private var englishSentences: [String] = []
+    @State private var wordTokens: [WordToken] = []
+    
+    // 🚀 音頻快取（加速自我介紹）
+    @State private var cachedIntroAudio: [AppLanguage: Data] = [:]
+    @State private var preloadingIntroLanguages: Set<AppLanguage> = []
     
     let aiListeningSymbol = "✨🤖✨"
     
@@ -86,11 +96,20 @@ struct ContentView: View {
             Color.clear
                 .onAppear {
                     isLandscape = computedIsLandscape
+                    // 🎬 延遲顯示主畫面，創造平滑啟動體驗
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                        withAnimation(.easeOut(duration: 0.3)) {
+                            isAppearing = true
+                        }
+                    }
                 }
-                .onChange(of: geometry.size) { newSize in
+                .onChange(of: geometry.size) { oldSize, newSize in
                     let newIsLandscape = newSize.width > newSize.height
-                    if newIsLandscape != isLandscape {
-                        withAnimation(.easeInOut(duration: 0.35)) {
+                    guard newIsLandscape != isLandscape else { return }
+                    
+                    // 節流：延遲少許再套用，避免旋轉過程中多次觸發重排
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
+                        withAnimation(.snappy(duration: 0.35, extraBounce: 0.0)) {
                             isLandscape = newIsLandscape
                         }
                     }
@@ -107,7 +126,7 @@ struct ContentView: View {
                     .frame(width: geometry.size.width, height: geometry.size.height)
                     .clipped()
                     .ignoresSafeArea()
-                    .opacity(0.3)
+                    .opacity(isAppearing ? 0.3 : 0)
                     .zIndex(0)
                 
                 LinearGradient(
@@ -164,6 +183,10 @@ struct ContentView: View {
                         .padding(.trailing, 20)
                         
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .trailing).combined(with: .opacity),
+                        removal: .move(edge: .leading).combined(with: .opacity)
+                    ))
                 } else {
                     // 🔵 直向模式 (iPhone & iPad Portrait)
                     VStack(spacing: 0) {
@@ -190,9 +213,15 @@ struct ContentView: View {
                         }
                         .padding(.bottom, 10)
                     }
+                    .transition(.asymmetric(
+                        insertion: .move(edge: .bottom).combined(with: .opacity),
+                        removal: .move(edge: .top).combined(with: .opacity)
+                    ))
                 }
             }
-            .transition(.opacity.combined(with: .scale))
+            .animation(.snappy(duration: 0.35, extraBounce: 0.0), value: isLandscape)
+            .opacity(isAppearing ? 1.0 : 0.0)
+            .scaleEffect(isAppearing ? 1.0 : 0.95)
             .blur(radius: (isServerConnected == nil || showParentalGate) ? 5 : 0)
             // Group 不設 zIndex，保持在背景上
             
@@ -228,15 +257,17 @@ struct ContentView: View {
             // 載入遮罩
             if isServerConnected == nil {
                 LoadingCoverView()
-                    .transition(.opacity.animation(.easeInOut(duration: 0.5)))
+                    .transition(.opacity.combined(with: .scale(scale: 1.05)))
+                    .animation(.easeOut(duration: 0.5), value: isServerConnected)
                     .zIndex(100)
             }
             
             // 家長鎖視窗
             if showParentalGate {
-                ParentalGateView(isPresented: $showParentalGate) {
+                ParentalGateView(isPresented: $showParentalGate, language: selectedLanguage) {
                     showPaywall = true
                 }
+                .transition(.scale.combined(with: .opacity))
                 .zIndex(200)
             }
         }
@@ -255,7 +286,7 @@ struct ContentView: View {
         .sheet(isPresented: $showPaywall) {
             paywallContent()
         }
-        .onChange(of: scenePhase) { newPhase in
+        .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
                 // 退出程式時重置所有介紹狀態
                 hasPlayedChineseIntro = false
@@ -268,6 +299,9 @@ struct ContentView: View {
             updateContentData()
             checkServerStatus()
             subManager.checkSubscriptionStatus()
+            
+            // 🚀 預載當前語言的自我介紹音頻（背景執行）
+            preloadAllIntroAudio()
             
             if !didPrewarm {
                 // 預熱圖片 decode (will happen by loading Image above)
@@ -393,7 +427,20 @@ struct ContentView: View {
                 .opacity(isRecording ? 1 : 0)
                 .animation(isRecording ? Animation.easeInOut(duration: 0.8).repeatForever(autoreverses: true) : .default, value: isRecording)
             
-            Image(systemName: isThinking ? "book.fill" : (isRecording ? "waveform.circle.fill" : "book.closed.fill"))
+            let statusIconName: String = {
+                if isServerConnected == nil && !isThinking && !isRecording {
+                    return "globe.asia.australia.fill"
+                }
+                if isThinking {
+                    return "book.fill"
+                }
+                if isRecording {
+                    return "waveform.circle.fill"
+                }
+                return "book.closed.fill"
+            }()
+            
+            Image(systemName: statusIconName)
                 .resizable()
                 .scaledToFit()
                 .frame(width: baseSize * 0.5 * finalScale)
@@ -405,8 +452,16 @@ struct ContentView: View {
     @ViewBuilder
     func conversationArea(geometry: GeometryProxy, isLandscape: Bool) -> some View {
         ScrollViewReader { proxy in
+            let scrollToUserText = {
+                DispatchQueue.main.async {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        proxy.scrollTo("UserText", anchor: .center)
+                    }
+                }
+            }
             ZStack(alignment: .bottom) {
                 ScrollView {
+                    Color.clear.frame(height: 0).id("ScrollTop")
                     if isThinking {
                         ThinkingAnimationView(language: selectedLanguage)
                             .frame(maxWidth: .infinity, minHeight: 120)
@@ -440,16 +495,17 @@ struct ContentView: View {
                             // 🔥 修改：呼叫新的獨立組件
                             if selectedLanguage == .chinese {
                                 ChineseContentView(
-                                    characterData: characterData,
+                                    characterData: aiResponse.toBopomofoCharacter(),
                                     isPlaying: isPlaying,
                                     currentWordIndex: currentWordIndex,
                                     isUserScrolling: isUserScrolling,
                                     onScrollTo: { index in
-                                        withAnimation { proxy.scrollTo(index, anchor: .center) }
+                                        withAnimation(.easeInOut(duration: 0.5)) {
+                                            proxy.scrollTo(index, anchor: .center)
+                                        }
                                     }
                                 )
                             } else if selectedLanguage == .japanese {
-                                // 🇯🇵 日文專用視圖（帶振假名）
                                 JapaneseContentView(
                                     japaneseSentences: englishSentences,
                                     isPlaying: isPlaying,
@@ -457,12 +513,11 @@ struct ContentView: View {
                                     isUserScrolling: isUserScrolling,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
-                                            proxy.scrollTo("Sentence-\(index)", anchor: .center)
+                                            proxy.scrollTo(index, anchor: .center)
                                         }
                                     }
                                 )
                             } else {
-                                // 英文視圖
                                 EnglishContentView(
                                     englishSentences: englishSentences,
                                     isPlaying: isPlaying,
@@ -470,7 +525,7 @@ struct ContentView: View {
                                     isUserScrolling: isUserScrolling,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
-                                            proxy.scrollTo("Sentence-\(index)", anchor: .center)
+                                            proxy.scrollTo(index, anchor: .center)
                                         }
                                     }
                                 )
@@ -479,6 +534,26 @@ struct ContentView: View {
                     }
                 }
                 .simultaneousGesture(DragGesture().onChanged { _ in isUserScrolling = true })
+                .onChange(of: aiResponse) { _, _ in
+                    guard !isUserScrolling else { return }
+                    DispatchQueue.main.async {
+                        withAnimation(.easeInOut(duration: 0.2)) {
+                            proxy.scrollTo("ScrollTop", anchor: .top)
+                        }
+                    }
+                }
+                .onChange(of: isPreparingRecording) { _, newValue in
+                    guard newValue, !isUserScrolling else { return }
+                    scrollToUserText()
+                }
+                .onChange(of: isRecording) { _, newValue in
+                    guard newValue, !isUserScrolling else { return }
+                    scrollToUserText()
+                }
+                .onChange(of: userSpokenText) { _, _ in
+                    guard (isRecording || isPreparingRecording), !isUserScrolling else { return }
+                    scrollToUserText()
+                }
                 
                 if isUserScrolling && isPlaying {
                     focusButton(proxy: proxy)
@@ -531,7 +606,8 @@ struct ContentView: View {
             }
             .disabled(isPreparingRecording)
             
-            if !isRecording && !isThinking && !isPreparingRecording && aiResponse.count > 20 && !isPlaying {
+            let canShowAgain = !isRecording && !isThinking && !isPreparingRecording && !isPlaying && !aiResponse.isEmpty
+            if canShowAgain {
                 HStack {
                     Spacer()
                     Button(action: { askExplainAgain() }) {
@@ -641,13 +717,17 @@ struct ContentView: View {
         isPreparingRecording = false
         isPlaying = false
         stopAudio()
+        SpeechService.shared.stopRecording()
         currentTask?.cancel()
         currentTask = nil
         currentWordIndex = 0
         currentSentenceIndex = 0
         selectedLanguage = lang
-        
+
         updateContentData()
+        
+        // 🚀 切換語言後，預載新語言的自我介紹
+        preloadIntroAudio(for: lang)
     }
     
     func triggerPaywall() {
@@ -672,7 +752,7 @@ struct ContentView: View {
         }
     }
     
-    /// 取得按鈕顯示文字（介紹 or 聽不懂）
+    /// 取得按鈕顯示文字（介紹或聽不懂）
     func getAgainButtonText() -> String {
         if needsIntro() {
             // 還沒播放過介紹，顯示「介紹」
@@ -692,9 +772,19 @@ struct ContentView: View {
     }
     
     func askExplainAgain() {
-        if !subManager.isPro && !checkFreeQuota() {
-            triggerPaywall()
-            return
+        if !subManager.isPro {
+            if !subManager.isSubscriptionLoaded {
+                userSpokenText = localizedText.statusConnecting
+                return
+            }
+            if !subManager.hasServerTime {
+                userSpokenText = localizedText.errorNetwork
+                return
+            }
+            if !checkFreeQuota() {
+                triggerPaywall()
+                return
+            }
         }
         
         // 🔥 優先判斷：如果還沒播放過介紹，就播放介紹
@@ -722,7 +812,19 @@ struct ContentView: View {
     
     func updateContentData() {
         if selectedLanguage == .chinese {
-            characterData = aiResponse.toBopomofoCharacter()
+            // 中文：以句子為單位顯示卡片
+            let rawSentences = aiResponse
+                .replacingOccurrences(of: "。", with: "。|")
+                .replacingOccurrences(of: "？", with: "？|")
+                .replacingOccurrences(of: "！", with: "！|")
+                .replacingOccurrences(of: ". ", with: ".|")
+                .replacingOccurrences(of: "? ", with: "?|")
+                .replacingOccurrences(of: "! ", with: "!|")
+                .split(separator: "|")
+                .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
+            englishSentences = rawSentences.isEmpty ? [aiResponse] : rawSentences
+            characterData = []
+            wordTokens = []
         } else if selectedLanguage == .japanese {
             // 🇯🇵 日文使用句子顯示（按句號、問號、驚嘆號分割）
             let rawSentences = aiResponse
@@ -732,6 +834,7 @@ struct ContentView: View {
                 .split(separator: "|")
                 .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             englishSentences = rawSentences.isEmpty ? [aiResponse] : rawSentences
+            wordTokens = buildWordTokens(for: aiResponse)
         } else {
             // 英文
             let rawSentences = aiResponse
@@ -741,7 +844,82 @@ struct ContentView: View {
                 .split(separator: "|")
                 .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             englishSentences = rawSentences.isEmpty ? [aiResponse] : rawSentences
+            wordTokens = buildWordTokens(for: aiResponse)
         }
+    }
+
+    func buildWordTokens(for text: String) -> [WordToken] {
+        guard !text.isEmpty else { return [] }
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+
+        var wordRanges: [Range<String.Index>] = []
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) { range, _ in
+            wordRanges.append(range)
+            return true
+        }
+
+        var tokens: [WordToken] = []
+        var lastIndex = text.startIndex
+        var id = 0
+
+        for range in wordRanges {
+            if lastIndex < range.lowerBound {
+                let gapRange = lastIndex..<range.lowerBound
+                let gapText = String(text[gapRange])
+                let display = gapText.filter { !$0.isWhitespace }
+                if !display.isEmpty {
+                    let start = text.distance(from: text.startIndex, to: gapRange.lowerBound)
+                    let length = text.distance(from: gapRange.lowerBound, to: gapRange.upperBound)
+                    tokens.append(WordToken(id: id, text: display, start: start, length: length, isWord: false))
+                    id += 1
+                }
+            }
+
+            let start = text.distance(from: text.startIndex, to: range.lowerBound)
+            let length = text.distance(from: range.lowerBound, to: range.upperBound)
+            let wordText = String(text[range])
+            tokens.append(WordToken(id: id, text: wordText, start: start, length: length, isWord: true))
+            id += 1
+            lastIndex = range.upperBound
+        }
+
+        if lastIndex < text.endIndex {
+            let gapRange = lastIndex..<text.endIndex
+            let gapText = String(text[gapRange])
+            let display = gapText.filter { !$0.isWhitespace }
+            if !display.isEmpty {
+                let start = text.distance(from: text.startIndex, to: gapRange.lowerBound)
+                let length = text.distance(from: gapRange.lowerBound, to: gapRange.upperBound)
+                tokens.append(WordToken(id: id, text: display, start: start, length: length, isWord: false))
+            }
+        }
+
+        return tokens
+    }
+
+    func wordTokenIndex(for charIndex: Int, tokens: [WordToken]) -> Int {
+        var lastWordIndex: Int?
+        for (index, token) in tokens.enumerated() {
+            guard token.isWord else { continue }
+            let start = token.start
+            let end = token.start + max(1, token.length)
+            if charIndex < start {
+                return lastWordIndex ?? index
+            }
+            if charIndex < end {
+                return index
+            }
+            lastWordIndex = index
+        }
+        return lastWordIndex ?? 0
+    }
+
+    func lastWordTokenIndex(in tokens: [WordToken]) -> Int {
+        if let index = tokens.lastIndex(where: { $0.isWord }) {
+            return index
+        }
+        return max(tokens.count - 1, 0)
     }
     
     func calculateCurrentSentence(charIndex: Int) {
@@ -754,6 +932,160 @@ struct ContentView: View {
                 }
                 return
             }
+        }
+    }
+    
+    // MARK: - 中文有效字數權重模型
+    func makeChineseWeights(for text: String) -> ([Double], [Double], Double) {
+        // 為每個字元建立權重，空白與無聲標點給 0，常見停頓標點給較高權重
+        let chars = Array(text)
+        var weights: [Double] = Array(repeating: 0.0, count: chars.count)
+
+        // 定義類別
+        let silentSet: Set<Character> = [" ", "\t", "\n"]
+        let lightPunct: Set<Character> = [",", ":", ";", "，", "：", "；"]
+        let midPausePunct: Set<Character> = ["、"]
+        // 🔥 優化 2: 更精細的標點權重
+        let periodSet: Set<Character> = [".", "。"]       // 句號停頓較長
+        let questionSet: Set<Character> = ["?", "？"]     // 問號中等停頓
+        let exclamationSet: Set<Character> = ["!", "！"]  // 驚嘆號停頓較短
+
+        for i in 0..<chars.count {
+            let c = chars[i]
+            if silentSet.contains(c) { weights[i] = 0.0; continue }
+            if lightPunct.contains(c) { weights[i] = 0.25; continue }
+            if midPausePunct.contains(c) { weights[i] = 0.5; continue }
+            
+            // 🔥 優化 2: 細分標點權重
+            if periodSet.contains(c) { weights[i] = 0.9; continue }      // 句號
+            if questionSet.contains(c) { weights[i] = 0.8; continue }    // 問號
+            if exclamationSet.contains(c) { weights[i] = 0.7; continue } // 驚嘆號
+            
+            // CJK 統一漢字或一般可發音字
+            if let scalar = c.unicodeScalars.first {
+                let v = scalar.value
+                let isCJK = (0x4E00...0x9FFF).contains(v)
+                let isLetterOrNumber = CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
+                weights[i] = (isCJK || isLetterOrNumber) ? 1.0 : 0.2
+            } else {
+                weights[i] = 0.2
+            }
+        }
+
+        // 前綴和
+        var cumulative: [Double] = Array(repeating: 0.0, count: weights.count + 1)
+        for i in 0..<weights.count {
+            cumulative[i + 1] = cumulative[i] + weights[i]
+        }
+        let total = cumulative.last ?? 0.0
+        return (weights, cumulative, total)
+    }
+
+    func indexForChineseProgress(progress: Double, cumulative: [Double]) -> Int {
+        // 將進度(0..1)映射到累積權重中的位置，回傳字元索引
+        guard let total = cumulative.last, total > 0 else { return 0 }
+        let target = progress * total
+        // 二分搜尋
+        var low = 0
+        var high = cumulative.count - 1
+        while low < high {
+            let mid = (low + high) / 2
+            if cumulative[mid] < target {
+                low = mid + 1
+            } else {
+                high = mid
+            }
+        }
+        // cumulative 的索引比字元索引多 1
+        return max(0, min(low - 1, cumulative.count - 2))
+    }
+
+    func isSpeakableChineseCharacter(_ c: Character) -> Bool {
+        guard let scalar = c.unicodeScalars.first else { return false }
+        let v = scalar.value
+        let isCJK = (0x4E00...0x9FFF).contains(v)
+        let isLetterOrNumber = CharacterSet.letters.contains(scalar) || CharacterSet.decimalDigits.contains(scalar)
+        return isCJK || isLetterOrNumber
+    }
+
+    func nearestSpeakableIndex(from index: Int, speakableMask: [Bool]) -> Int {
+        guard !speakableMask.isEmpty else { return index }
+        let clampedIndex = max(0, min(index, speakableMask.count - 1))
+        if speakableMask[clampedIndex] { return clampedIndex }
+        var backward = clampedIndex - 1
+        while backward >= 0 {
+            if speakableMask[backward] { return backward }
+            backward -= 1
+        }
+        var forward = clampedIndex + 1
+        while forward < speakableMask.count {
+            if speakableMask[forward] { return forward }
+            forward += 1
+        }
+        return clampedIndex
+    }
+    
+    // MARK: - 🔥 優化 5: 檢測是否接近標點符號
+    func isNearPunctuation(text: String, index: Int, weights: [Double]) -> Bool {
+        guard index >= 0 && index < weights.count else { return false }
+        
+        // 檢查當前字符及前後各 1 個字符
+        let range = max(0, index - 1)...min(weights.count - 1, index + 1)
+        
+        for i in range {
+            // 權重 >= 0.7 表示是重要標點（句號、問號、驚嘆號）
+            if weights[i] >= 0.7 && weights[i] < 1.0 {
+                return true
+            }
+        }
+        
+        return false
+    }
+    
+    // MARK: - 🔥 優化 6: 音訊波形分析（檢測靜音區域）
+    func detectSilenceRegions(audioData: Data) -> (leadingSilence: TimeInterval, trailingSilence: TimeInterval) {
+        // 快速啟發式檢測：避免完整波形分析的複雜度
+        // 使用 AVAudioPlayer 的特性進行估算
+        
+        do {
+            let player = try AVAudioPlayer(data: audioData)
+            player.prepareToPlay()
+            
+            let duration = player.duration
+            
+            // 🎯 基於 OpenAI TTS 的經驗值
+            // 中文 TTS 通常有以下特性：
+            // - 開頭靜音：0.15-0.35 秒（平均 0.25 秒）
+            // - 結尾靜音：0.1-0.3 秒（平均 0.2 秒）
+            
+            // 根據音訊長度動態調整
+            let leadingSilence: TimeInterval
+            let trailingSilence: TimeInterval
+            
+            if duration < 2.0 {
+                // 短音訊：靜音較少
+                leadingSilence = 0.15
+                trailingSilence = 0.1
+            } else if duration < 5.0 {
+                // 中等長度：使用標準值
+                leadingSilence = 0.25
+                trailingSilence = 0.2
+            } else {
+                // 長音訊：靜音可能較多
+                leadingSilence = 0.35
+                trailingSilence = 0.3
+            }
+            
+            #if DEBUG
+            print("[TTS][Silence] duration=\(String(format: "%.2f", duration))s, leading=\(String(format: "%.2f", leadingSilence))s, trailing=\(String(format: "%.2f", trailingSilence))s")
+            #endif
+            
+            return (leadingSilence, trailingSilence)
+            
+        } catch {
+            print("[TTS][Silence] Failed to analyze audio: \(error)")
+            // 發生錯誤時使用保守的預設值
+            return (0.25, 0.2)
         }
     }
     
@@ -777,22 +1109,49 @@ struct ContentView: View {
     }
     
     func playIntroMessage() {
-        // 🚀 優化：自我介紹不需要顯示 "思考中" 動畫
         let introText = localizedText.introMessage
         userSpokenText = localizedText.firstMeeting
         
-        // 立即更新 UI，不顯示載入動畫
+        // 立即更新 UI
         aiResponse = introText
+        
+        // 新增：重置播放狀態相關索引與滾動狀態
+        currentWordIndex = 0
+        currentSentenceIndex = 0
+        isUserScrolling = false
+        
         updateContentData()
         
         currentTask = Task {
             do {
-                // 🚀 直接調用 TTS，省略 AI 處理步驟
-                let cleanText = introText.cleanForTTS()
-                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
+                let audioData: Data
+                
+                // 🚀 檢查是否有快取的音頻
+                if let cached = cachedIntroAudio[selectedLanguage] {
+                    print("⚡️ 使用快取的自我介紹音頻")
+                    audioData = cached
+                } else if let diskCached = loadIntroAudioFromDisk(for: selectedLanguage) {
+                    print("⚡️ 使用磁碟快取的自我介紹音頻")
+                    audioData = diskCached
+                    await MainActor.run {
+                        cachedIntroAudio[selectedLanguage] = diskCached
+                    }
+                } else {
+                    // 沒有快取，生成新的
+                    print("🎤 生成自我介紹音頻...")
+                    let cleanText = introText.cleanForTTS(language: selectedLanguage)
+                    audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: selectedLanguage)
+                    
+                    // 快取音頻以供下次使用
+                    saveIntroAudioToDisk(audioData, for: selectedLanguage)
+                    await MainActor.run {
+                        cachedIntroAudio[selectedLanguage] = audioData
+                    }
+                }
+                
                 await playAudio(data: audioData, textToRead: introText)
                 
-                // 🔥 根據當前語言設定對應的介紹狀態
+                // 根據當前語言設定對應的介紹狀態
                 await MainActor.run {
                     switch selectedLanguage {
                     case .chinese:
@@ -813,6 +1172,66 @@ struct ContentView: View {
         }
     }
     
+    // 🚀 預載自我介紹音頻（背景執行）
+    func preloadIntroAudio(for language: AppLanguage) {
+        if cachedIntroAudio[language] == nil, let diskCached = loadIntroAudioFromDisk(for: language) {
+            cachedIntroAudio[language] = diskCached
+            return
+        }
+        
+        // 避免重複預載
+        guard cachedIntroAudio[language] == nil, !preloadingIntroLanguages.contains(language) else { return }
+        
+        preloadingIntroLanguages.insert(language)
+        
+        Task {
+            do {
+                let introText = LocalizedStrings(language: language).introMessage
+                let cleanText = introText.cleanForTTS(language: language)
+                
+                print("🚀 開始預載 \(language.rawValue) 自我介紹音頻...")
+                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: language)
+                saveIntroAudioToDisk(audioData, for: language)
+                
+                await MainActor.run {
+                    cachedIntroAudio[language] = audioData
+                    preloadingIntroLanguages.remove(language)
+                    print("✅ \(language.rawValue) 自我介紹音頻預載完成")
+                }
+            } catch {
+                print("❌ 預載自我介紹失敗: \(error)")
+                await MainActor.run {
+                    preloadingIntroLanguages.remove(language)
+                }
+            }
+        }
+    }
+
+    func preloadAllIntroAudio() {
+        for language in AppLanguage.allCases {
+            preloadIntroAudio(for: language)
+        }
+    }
+
+    private func introAudioURL(for language: AppLanguage) -> URL? {
+        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
+            return nil
+        }
+        let filename = "intro-\(language.rawValue).m4a"
+        return caches.appendingPathComponent(filename)
+    }
+    
+    private func loadIntroAudioFromDisk(for language: AppLanguage) -> Data? {
+        guard let url = introAudioURL(for: language),
+              FileManager.default.fileExists(atPath: url.path) else { return nil }
+        return try? Data(contentsOf: url)
+    }
+    
+    private func saveIntroAudioToDisk(_ data: Data, for language: AppLanguage) {
+        guard let url = introAudioURL(for: language) else { return }
+        try? data.write(to: url, options: [.atomic])
+    }
+    
     var statusText: String {
         switch isServerConnected {
         case true: return localizedText.statusOnline
@@ -828,7 +1247,7 @@ struct ContentView: View {
         if isThinking {
             return localizedText.hintCancel
         }
-        return isPreparingRecording ? localizedText.hintPreparing : 
+        return isPreparingRecording ? localizedText.hintPreparing :
                (isRecording ? localizedText.hintListening : localizedText.hintTapToSpeak)
     }
     
@@ -840,12 +1259,50 @@ struct ContentView: View {
     }
     
     func startListening() {
-        if !subManager.isPro && !checkFreeQuota() {
-            triggerPaywall()
-            return
+        if !subManager.isPro {
+            if !subManager.isSubscriptionLoaded {
+                userSpokenText = localizedText.statusConnecting
+                return
+            }
+            if !subManager.hasServerTime {
+                userSpokenText = localizedText.errorNetwork
+                return
+            }
+            if !checkFreeQuota() {
+                triggerPaywall()
+                return
+            }
         }
         
         guard !isThinking && !isPreparingRecording else { return }
+
+        let permissionState = SpeechService.shared.permissionState()
+        switch permissionState {
+        case .authorized:
+            beginRecording()
+        case .notDetermined:
+            isPreparingRecording = true
+            userSpokenText = localizedText.permissionRequest
+            SpeechService.shared.requestPermissions { granted in
+                self.isPreparingRecording = false
+                if granted {
+                    self.startListening()
+                } else {
+                    self.userSpokenText = self.localizedText.permissionDenied
+                    self.isRecording = false
+                }
+            }
+        case .denied:
+            userSpokenText = localizedText.permissionDenied
+            isPreparingRecording = false
+            isRecording = false
+        }
+    }
+
+    private func beginRecording() {
+        #if DEBUG
+        print("[STT] startListening language=\(selectedLanguage.rawValue)")
+        #endif
         
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.prepare()
@@ -860,12 +1317,18 @@ struct ContentView: View {
         isUserScrolling = false
         
         SpeechService.shared.onRecordingStarted = {
+            #if DEBUG
+            print("[STT] recording started")
+            #endif
             self.isPreparingRecording = false
             self.isRecording = true
             self.userSpokenText = self.aiListeningSymbol
         }
         
         SpeechService.shared.onSpeechDetected = { text, isFinished in
+            #if DEBUG
+            print("[STT] partial len=\(text.count) isFinished=\(isFinished)")
+            #endif
             if isFinished {
                 self.finishRecording()
             } else {
@@ -891,6 +1354,9 @@ struct ContentView: View {
         guard isRecording else { return }
         isRecording = false
         isPreparingRecording = false
+        #if DEBUG
+        print("[STT] finishRecording textLen=\(userSpokenText.count)")
+        #endif
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.impactOccurred()
         if userSpokenText == aiListeningSymbol || userSpokenText.isEmpty || userSpokenText == "..." {
@@ -922,19 +1388,21 @@ struct ContentView: View {
                         answer: answer,
                         language: localizedText.historyLanguageCode
                     )
+                    subManager.recordUsage()
                     
                     aiResponse = ""
                     aiResponse = answer
                     currentWordIndex = 0
                     currentSentenceIndex = 0
                     isUserScrolling = false
+                    markIntroAsUsed(for: selectedLanguage)
                     updateContentData()
                 }
                 
                 if Task.isCancelled { return }
                 
-                let cleanText = answer.cleanForTTS()
-                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText)
+                let cleanText = answer.cleanForTTS(language: selectedLanguage)
+                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: selectedLanguage)
                 
                 if Task.isCancelled { return }
                 
@@ -966,12 +1434,36 @@ struct ContentView: View {
             audioPlayer = try AVAudioPlayer(data: data)
             audioPlayer?.prepareToPlay()
             audioPlayer?.volume = 1.0
+            
+            // 檢查合理的時長，避免字幕瞬間刷完
+            let duration = audioPlayer?.duration ?? 0
+            #if DEBUG
+            print("[TTS] duration=\(String(format: "%.2f", duration))s, textLen=\(textToRead.count)")
+            #endif
+            if duration <= 0.2 {
+                // 不合理的音訊長度：停用字幕同步，只做最基本播放
+                audioPlayer?.play()
+                isThinking = false
+                currentWordIndex = 0
+                isPlaying = true
+                // 直接在一秒後結束字幕同步
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
+                    self.currentWordIndex = (self.selectedLanguage == .chinese) ? (textToRead.count) : (textToRead.count)
+                    self.isPlaying = false
+                }
+                return
+            }
+            
+            // 延後字幕同步，直到確實開始播放
+            var didStartPlayback = false
+            
             audioPlayer?.play()
             
             isThinking = false
             
             // 🔥 計算實際會發音的字符數量
             let totalChars: Int
+            let displayCharsCount = textToRead.count
             if selectedLanguage == .chinese {
                 // 中文：只計算漢字和字母數字，排除標點符號和空白
                 totalChars = textToRead.filter { char in
@@ -982,47 +1474,143 @@ struct ContentView: View {
                     return isCJK || isAlphanumeric
                 }.count
                 
-                print("🎵 中文字幕同步：原始文字 \(textToRead.count) 字 → 實際發音 \(totalChars) 字")
+                // print("🎵 中文字幕同步：原始文字 \(textToRead.count) 字 → 實際發音 \(totalChars) 字")
             } else {
                 // 英文/日文：使用原始字數
                 totalChars = textToRead.count
             }
             
-            textTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { timer in
+            // 準備中文權重（僅中文使用）
+            var zhCumulative: [Double] = []
+            var zhTotal: Double = 0
+            var zhSpeakableMask: [Bool] = []
+            if selectedLanguage == .chinese {
+                let (_, cumulative, total) = makeChineseWeights(for: textToRead)
+                zhCumulative = cumulative
+                zhTotal = total
+                if total <= 0 {
+                    print("[TTS][ZH] cumulative total is 0, fallback to uniform mapping. Text length: \(textToRead.count)")
+                }
+                let textChars = Array(textToRead)
+                zhSpeakableMask = textChars.map { isSpeakableChineseCharacter($0) }
+            }
+            
+            // 🔥 優化 4: 動態計算 alpha 值（根據語速）
+            let speedPerChar = duration / Double(max(totalChars, 1))  // 每字時間
+            let dynamicAlpha: Double
+            if speedPerChar < 0.1 {
+                dynamicAlpha = 0.15  // 快速語音：更快響應
+            } else if speedPerChar > 0.2 {
+                dynamicAlpha = 0.35  // 慢速語音：更平滑
+            } else {
+                dynamicAlpha = 0.25  // 中速語音：預設值
+            }
+            
+            #if DEBUG
+            print("[TTS][ZH] speedPerChar=\(String(format: "%.3f", speedPerChar))s, alpha=\(String(format: "%.2f", dynamicAlpha))")
+            #endif
+            
+            // 🔥 優化 6: 音訊波形分析（檢測實際發音時間點）
+            let silenceDetection = detectSilenceRegions(audioData: data)
+            let leadingSilence = silenceDetection.leadingSilence
+            let trailingSilence = silenceDetection.trailingSilence
+            
+            #if DEBUG
+            print("[TTS][ZH] leadingSilence=\(String(format: "%.2f", leadingSilence))s, trailingSilence=\(String(format: "%.2f", trailingSilence))s")
+            #endif
+            
+            var smoothedProgress = 0.0
+            textTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
                 guard let player = self.audioPlayer else {
                     timer.invalidate()
                     return
                 }
                 
                 if player.isPlaying {
-                    let percentage = player.currentTime / player.duration
+                    // 等待播放器確實開始
+                    if !didStartPlayback {
+                        if player.currentTime <= 0 {
+                            #if DEBUG
+                            print("[TTS] waiting for playback start...")
+                            #endif
+                            return
+                        }
+                        didStartPlayback = true
+                    }
                     
-                    // 🔥 針對中文進行時間校正（補償 TTS 的開頭和結尾停頓）
-                    var adjustedPercentage = percentage
+                    // 🔥 優化 6: 使用波形分析結果調整時間軸
+                    let adjustedCurrentTime = max(0, player.currentTime - leadingSilence)
+                    let adjustedDuration = max(0.001, player.duration - leadingSilence - trailingSilence)
+                    
+                    // Base percentage from player（使用調整後的時間）
+                    let raw = max(0.0, min(1.0, adjustedCurrentTime / adjustedDuration))
+                    
                     if self.selectedLanguage == .chinese {
-                        // OpenAI TTS 中文有明顯的前後停頓
-                        // 前 8% 是開場停頓，後 8% 是結尾停頓
-                        if percentage < 0.08 {
-                            // 前段幾乎不動
+                        // 以句子為單位的進度（與英/日一致）
+                        var adjustedPercentage = raw
+                        if raw < 0.03 {
                             adjustedPercentage = 0.0
-                        } else if percentage > 0.92 {
-                            // 後段直接跳到結尾
+                        } else if raw > 0.95 {
                             adjustedPercentage = 1.0
                         } else {
-                            // 中間段重新映射到 0-1
-                            adjustedPercentage = (percentage - 0.08) / 0.84
+                            adjustedPercentage = (raw - 0.03) / 0.92
                         }
+
+                        smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
+                        let progress = max(0.0, min(1.0, smoothedProgress))
+                        let charIndex: Int
+                        if zhTotal > 0 {
+                            charIndex = indexForChineseProgress(progress: progress, cumulative: zhCumulative)
+                        } else {
+                            charIndex = Int(Double(displayCharsCount) * progress)
+                        }
+                        let alignedIndex = nearestSpeakableIndex(from: charIndex, speakableMask: zhSpeakableMask)
+                        self.currentWordIndex = min(alignedIndex, displayCharsCount)
+                        self.calculateCurrentSentence(charIndex: alignedIndex)
+                    } else if self.selectedLanguage == .english {
+                        // 🇺🇸 英文時間校正
+                        var adjustedPercentage = raw
+                        if raw < 0.03 {
+                            adjustedPercentage = 0.0
+                        } else if raw > 0.95 {
+                            adjustedPercentage = 1.0
+                        } else {
+                            adjustedPercentage = (raw - 0.03) / 0.92
+                        }
+
+                        smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
+                        let progress = max(0.0, min(1.0, smoothedProgress))
+                        let charIndex = Int(Double(displayCharsCount) * progress)
+                        self.currentWordIndex = charIndex
+                        self.calculateCurrentSentence(charIndex: charIndex)
+                    } else if self.selectedLanguage == .japanese {
+                        // 🇯🇵 日文時間校正
+                        var adjustedPercentage = raw
+                        if raw < 0.03 {
+                            adjustedPercentage = 0.0
+                        } else if raw > 0.95 {
+                            adjustedPercentage = 1.0
+                        } else {
+                            adjustedPercentage = (raw - 0.03) / 0.92
+                        }
+
+                        smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
+                        let progress = max(0.0, min(1.0, smoothedProgress))
+                        let charIndex = Int(Double(displayCharsCount) * progress)
+                        self.currentWordIndex = charIndex
+                        self.calculateCurrentSentence(charIndex: charIndex)
                     }
                     
-                    let charIndex = Int(Double(totalChars) * adjustedPercentage)
-                    self.currentWordIndex = min(charIndex, totalChars)
-                    
-                    if self.selectedLanguage == .english || self.selectedLanguage == .japanese {
-                        calculateCurrentSentence(charIndex: charIndex)
-                    }
                 } else {
                     timer.invalidate()
-                    self.currentWordIndex = totalChars // 播放結束時顯示所有字
+                    let endIndex: Int
+                    if self.selectedLanguage == .chinese {
+                        endIndex = displayCharsCount
+                    } else {
+                        endIndex = displayCharsCount
+                    }
+                    self.currentWordIndex = endIndex
+                    self.currentSentenceIndex = max(0, self.englishSentences.count - 1)
                     self.isPlaying = false
                 }
             }
@@ -1039,17 +1627,25 @@ struct ContentView: View {
         textTimer = nil
         isPlaying = false
     }
+
+    func markIntroAsUsed(for language: AppLanguage) {
+        switch language {
+        case .chinese:
+            hasPlayedChineseIntro = true
+        case .english:
+            hasPlayedEnglishIntro = true
+        case .japanese:
+            hasPlayedJapaneseIntro = true
+        }
+    }
     
     func focusButton(proxy: ScrollViewProxy) -> some View {
         Button(action: {
             isUserScrolling = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.spring()) {
-                    if selectedLanguage == .english || selectedLanguage == .japanese {
-                        proxy.scrollTo("Sentence-\(currentSentenceIndex)", anchor: .center)
-                    } else {
-                        proxy.scrollTo(currentWordIndex, anchor: .center)
-                    }
+                    let targetIndex = (selectedLanguage == .chinese) ? currentWordIndex : currentSentenceIndex
+                    proxy.scrollTo(targetIndex, anchor: .center)
                 }
             }
         }) {
@@ -1068,7 +1664,7 @@ struct ContentView: View {
     }
 }
 
-// MARK: - 新增獨立中文內容視圖
+// MARK: - 新增獨立中文內容視圖（卡拉OK效果）
 struct ChineseContentView: View {
     let characterData: [(char: String, bopomofo: String)]
     let isPlaying: Bool
@@ -1079,30 +1675,97 @@ struct ChineseContentView: View {
     var body: some View {
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
             ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
-                VStack(spacing: 0) {
-                    let shouldShow = !isPlaying || index < currentWordIndex
-                    
-                    if !item.bopomofo.isEmpty {
-                        Text(item.bopomofo)
-                            .font(.system(size: 10, weight: .regular))
-                            .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.6))
-                            .fixedSize()
-                    }
-                    Text(item.char)
-                        .font(.system(size: 26, weight: .bold, design: .rounded))
-                        .foregroundColor(shouldShow ? .MagicBlue : .gray.opacity(0.5))
-                }
+                ChineseCharacterView(
+                    character: item.char,
+                    bopomofo: item.bopomofo,
+                    index: index,
+                    currentIndex: currentWordIndex,
+                    isPlaying: isPlaying
+                )
                 .id(index)
-                .frame(minWidth: 38)
-                .scaleEffect(isPlaying && index == currentWordIndex - 1 ? 1.2 : 1.0)
-                .animation(isPlaying && index == currentWordIndex - 1 ? .spring(response: 0.3) : .none, value: isPlaying ? currentWordIndex : 0)
             }
         }
         .padding()
-        .onChange(of: currentWordIndex) { newIndex in
+        .onChange(of: currentWordIndex) { _, newIndex in
             if newIndex > 0 && !isUserScrolling {
                 onScrollTo(newIndex)
             }
+        }
+    }
+}
+
+// MARK: - 🎤 中文單字卡拉OK組件
+struct ChineseCharacterView: View {
+    let character: String
+    let bopomofo: String
+    let index: Int
+    let currentIndex: Int
+    let isPlaying: Bool
+    
+    var body: some View {
+        let isCurrent = index == currentIndex  // 正在唸
+        
+        VStack(spacing: 0) {
+            // 注音符號
+            if !bopomofo.isEmpty {
+                Text(bopomofo)
+                    .font(.system(size: 10, weight: .regular))
+                    .foregroundColor(getBopomofoColor())
+                    .opacity(getBopomofoOpacity())
+                    .fixedSize()
+            }
+            
+            // 漢字
+            Text(character)
+                .font(.system(size: 26, weight: isCurrent ? .heavy : .bold, design: .rounded))
+                .foregroundColor(getCharacterColor())
+                .shadow(color: isCurrent && isPlaying ? Color.MagicBlue.opacity(0.5) : .clear, radius: 8)
+        }
+        .frame(minWidth: 38)
+        .scaleEffect(isCurrent && isPlaying ? 1.25 : 1.0)
+        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isCurrent)
+    }
+    
+    // 🎨 注音符號顏色
+    private func getBopomofoColor() -> Color {
+        if !isPlaying {
+            return .gray.opacity(0.6)
+        }
+        
+        if index < currentIndex {
+            return .MagicBlue.opacity(0.8)  // 已唸過：藍色半透明
+        } else if index == currentIndex {
+            return .ButtonRed  // 正在唸：紅色
+        } else {
+            return .gray.opacity(0.5)  // 未唸：灰色
+        }
+    }
+    
+    // 🎨 注音符號透明度
+    private func getBopomofoOpacity() -> Double {
+        if !isPlaying {
+            return 1.0
+        }
+        
+        if index == currentIndex {
+            return 1.0  // 正在唸：完全不透明
+        } else {
+            return 0.7  // 其他：稍微透明
+        }
+    }
+    
+    // 🎨 漢字顏色（卡拉OK漸變效果）
+    private func getCharacterColor() -> Color {
+        if !isPlaying {
+            return .gray.opacity(0.5)
+        }
+        
+        if index < currentIndex {
+            return .MagicBlue  // 已唸過：藍色
+        } else if index == currentIndex {
+            return .ButtonRed  // 正在唸：紅色（卡拉OK效果）
+        } else {
+            return .gray.opacity(0.4)  // 未唸：淺灰色
         }
     }
 }
@@ -1122,7 +1785,7 @@ struct EnglishContentView: View {
                 
                 Text(sentence)
                     .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
-                    .foregroundColor(isActive ? .DarkText : .gray.opacity(0.7))
+                    .foregroundColor(isActive ? .MagicBlue : .gray.opacity(0.7))
                     .multilineTextAlignment(.leading)
                     .padding()
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -1131,7 +1794,7 @@ struct EnglishContentView: View {
                     .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
                     .scaleEffect(isActive ? 1.02 : 1.0)
                     .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
-                    .id("Sentence-\(index)")
+                    .id(index)
                     .onTapGesture {  }
             }
             
@@ -1145,7 +1808,7 @@ struct EnglishContentView: View {
         }
         .padding()
         .padding(.bottom, 40)
-        .onChange(of: currentSentenceIndex) { newIndex in
+        .onChange(of: currentSentenceIndex) { _, newIndex in
             if !isUserScrolling {
                 onScrollTo(newIndex)
             }
@@ -1171,7 +1834,7 @@ struct JapaneseContentView: View {
                     sentence,
                     fontSize: isActive ? 20 : 18,
                     fontWeight: isActive ? .bold : .regular,
-                    textColor: isActive ? .DarkText : .gray.opacity(0.7)
+                    textColor: isActive ? .MagicBlue : .gray.opacity(0.7)
                 )
                 .padding()
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -1180,7 +1843,7 @@ struct JapaneseContentView: View {
                 .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
                 .scaleEffect(isActive ? 1.02 : 1.0)
                 .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
-                .id("Sentence-\(index)")
+                .id(index)
                 .onTapGesture {  }
             }
             
@@ -1194,7 +1857,75 @@ struct JapaneseContentView: View {
         }
         .padding()
         .padding(.bottom, 40)
-        .onChange(of: currentSentenceIndex) { newIndex in
+        .onChange(of: currentSentenceIndex) { _, newIndex in
+            if !isUserScrolling {
+                onScrollTo(newIndex)
+            }
+        }
+    }
+}
+
+// MARK: - 中文卡片式內容視圖（每字上方顯示注音）
+struct ChineseCardContentView: View {
+    let sentences: [String]
+    let isPlaying: Bool
+    let currentSentenceIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+
+    var body: some View {
+        VStack(spacing: 12) {
+            ForEach(Array(sentences.enumerated()), id: \.offset) { index, sentence in
+                let isActive = isPlaying && (index == currentSentenceIndex)
+                // 將句子拆成 (字, 注音) 陣列
+                let pairs = sentence.toBopomofoCharacter()
+
+                // 逐字顯示：注音在上、漢字在下
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 6) {
+                        ForEach(Array(pairs.enumerated()), id: \.offset) { _, item in
+                            VStack(spacing: 2) {
+                                if !item.bopomofo.isEmpty {
+                                    Text(item.bopomofo)
+                                        .font(.system(size: 10))
+                                        .foregroundColor(isActive ? .MagicBlue : .gray.opacity(0.6))
+                                        .fixedSize()
+                                } else {
+                                    // 佔位，讓無注音的標點/空白對齊
+                                    Text(" ")
+                                        .font(.system(size: 10))
+                                        .foregroundColor(.clear)
+                                }
+                                Text(item.char)
+                                    .font(.system(size: isActive ? 22 : 20, weight: isActive ? .bold : .regular, design: .rounded))
+                                    .foregroundColor(isActive ? .ButtonRed : .DarkText.opacity(0.8))
+                            }
+                            .padding(.vertical, 4)
+                            .padding(.horizontal, 2)
+                        }
+                    }
+                }
+                .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(isActive ? Color.white : Color.white.opacity(0.5))
+                .cornerRadius(16)
+                .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
+                .scaleEffect(isActive ? 1.02 : 1.0)
+                .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
+                .id("Sentence-\(index)")
+            }
+
+            if sentences.count > 2 && currentSentenceIndex < sentences.count - 1 && !isUserScrolling {
+                Image(systemName: "chevron.down.circle.fill")
+                    .font(.system(size: 24))
+                    .foregroundColor(.MagicBlue.opacity(0.6))
+                    .padding(.bottom, 10)
+                    .opacity(isPlaying ? 0 : 1)
+            }
+        }
+        .padding()
+        .padding(.bottom, 40)
+        .onChange(of: currentSentenceIndex) { _, newIndex in
             if !isUserScrolling {
                 onScrollTo(newIndex)
             }
@@ -1204,32 +1935,166 @@ struct JapaneseContentView: View {
 
 // MARK: - 輔助元件與擴充
 
+struct WordToken: Identifiable {
+    let id: Int
+    let text: String
+    let start: Int
+    let length: Int
+    let isWord: Bool
+}
+
+struct EnglishWordFlowContentView: View {
+    let tokens: [WordToken]
+    let fullText: String
+    let isPlaying: Bool
+    let currentWordIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+
+    @ViewBuilder
+    private var content: some View {
+        if tokens.isEmpty {
+            Text(fullText)
+                .font(.system(size: 20, weight: .regular, design: .rounded))
+                .foregroundColor(.gray.opacity(0.8))
+                .multilineTextAlignment(.leading)
+        } else {
+            FlowLayout(spacing: 6) {
+                ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
+                    let tokenIndex = token.id
+                    let isCurrent = isPlaying && token.isWord && tokenIndex == currentWordIndex
+                    let isPast = isPlaying && token.isWord && tokenIndex < currentWordIndex
+                    let color: Color = {
+                        if !isPlaying {
+                            return .gray.opacity(0.7)
+                        }
+                        if token.isWord {
+                            return isCurrent ? .ButtonRed : (isPast ? .MagicBlue : .gray.opacity(0.6))
+                        }
+                        return .gray.opacity(0.6)
+                    }()
+
+                    Text(token.text)
+                        .font(.system(size: isCurrent ? 22 : 20, weight: isCurrent ? .bold : .regular, design: .rounded))
+                        .foregroundColor(color)
+                        .scaleEffect(isCurrent ? 1.08 : 1.0)
+                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: currentWordIndex)
+                        .id(token.id)
+                }
+            }
+        }
+    }
+
+    var body: some View {
+        content
+            .padding()
+            .padding(.bottom, 40)
+            .onChange(of: currentWordIndex) { _, newIndex in
+                if newIndex > 0 && !isUserScrolling {
+                    onScrollTo(newIndex)
+                }
+            }
+    }
+}
+
+struct JapaneseWordFlowContentView: View {
+    let tokens: [WordToken]
+    let fullText: String
+    let isPlaying: Bool
+    let currentWordIndex: Int
+    let isUserScrolling: Bool
+    let onScrollTo: (Int) -> Void
+
+    @ViewBuilder
+    private var content: some View {
+        if tokens.isEmpty {
+            FuriganaText(
+                fullText,
+                fontSize: 20,
+                fontWeight: .regular,
+                textColor: .gray.opacity(0.8)
+            )
+        } else {
+            FlowLayout(spacing: 4) {
+                ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
+                    let tokenIndex = token.id
+                    let isCurrent = isPlaying && token.isWord && tokenIndex == currentWordIndex
+                    let isPast = isPlaying && token.isWord && tokenIndex < currentWordIndex
+                    let color: Color = {
+                        if !isPlaying {
+                            return .gray.opacity(0.7)
+                        }
+                        if token.isWord {
+                            return isCurrent ? .ButtonRed : (isPast ? .MagicBlue : .gray.opacity(0.6))
+                        }
+                        return .gray.opacity(0.6)
+                    }()
+
+                    if token.isWord {
+                        FuriganaText(
+                            token.text,
+                            fontSize: isCurrent ? 22 : 20,
+                            fontWeight: isCurrent ? .bold : .regular,
+                            textColor: color
+                        )
+                        .scaleEffect(isCurrent ? 1.06 : 1.0)
+                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: currentWordIndex)
+                        .id(token.id)
+                    } else {
+                        Text(token.text)
+                            .font(.system(size: 18, weight: .regular, design: .rounded))
+                            .foregroundColor(color)
+                            .id(token.id)
+                    }
+                }
+            }
+        }
+    }
+
+    var body: some View {
+        content
+            .padding()
+            .padding(.bottom, 40)
+            .onChange(of: currentWordIndex) { _, newIndex in
+                if newIndex > 0 && !isUserScrolling {
+                    onScrollTo(newIndex)
+                }
+            }
+    }
+}
+
 struct ParentalGateView: View {
     @Binding var isPresented: Bool
+    let language: AppLanguage
     var onSuccess: () -> Void
     
     @State private var num1 = Int.random(in: 1...5)
     @State private var num2 = Int.random(in: 1...5)
     @State private var answer = ""
     @State private var showError = false
+    @State private var scale: CGFloat = 0.8
+    @State private var opacity: Double = 0
     
     var body: some View {
         ZStack {
-            Color.black.opacity(0.4).ignoresSafeArea()
+            Color.black.opacity(0.4)
+                .ignoresSafeArea()
+                .opacity(opacity)
+            
             VStack(spacing: 20) {
                 Image(systemName: "lock.circle.fill")
                     .font(.system(size: 50))
                     .foregroundColor(.MagicBlue)
                 
-                Text("家長確認 (Parent Gate)")
+                Text(titleText)
                     .font(.headline)
                     .foregroundColor(.black)
                 
-                Text("請回答：\(num1) + \(num2) = ?")
+                Text(questionText)
                     .font(.title2).bold()
                     .foregroundColor(.black)
                 
-                TextField("答案", text: $answer)
+                TextField(answerPlaceholder, text: $answer)
                     .keyboardType(.numberPad)
                     .multilineTextAlignment(.center)
                     .padding()
@@ -1239,24 +2104,33 @@ struct ParentalGateView: View {
                     .foregroundColor(.black)
                 
                 if showError {
-                    Text("答案錯誤，請再試一次")
+                    Text(errorText)
                         .foregroundColor(.red)
                         .font(.caption)
+                        .transition(.scale.combined(with: .opacity))
                 }
                 
                 HStack {
-                    Button("取消") { isPresented = false }
-                        .foregroundColor(.gray)
+                    Button(cancelText) {
+                        withAnimation(.spring(response: 0.3)) {
+                            isPresented = false
+                        }
+                    }
+                    .foregroundColor(.gray)
                     
                     Spacer().frame(width: 40)
                     
-                    Button("確認") {
+                    Button(confirmText) {
                         let input = answer.trimmingCharacters(in: .whitespacesAndNewlines)
                         if Int(input) == (num1 + num2) {
-                            onSuccess()
-                            isPresented = false
+                            withAnimation(.spring(response: 0.3)) {
+                                onSuccess()
+                                isPresented = false
+                            }
                         } else {
-                            showError = true
+                            withAnimation(.spring(response: 0.3, dampingFraction: 0.6)) {
+                                showError = true
+                            }
                             answer = ""
                         }
                     }
@@ -1269,37 +2143,231 @@ struct ParentalGateView: View {
             .cornerRadius(20)
             .shadow(radius: 10)
             .padding(40)
+            .scaleEffect(scale)
+            .opacity(opacity)
+        }
+        .onAppear {
+            // 🎬 彈出動畫
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.75)) {
+                scale = 1.0
+                opacity = 1.0
+            }
+        }
+    }
+
+    private var titleText: String {
+        switch language {
+        case .chinese:
+            return "家長確認 (Parent Gate)"
+        case .english:
+            return "Parent Gate"
+        case .japanese:
+            return "保護者(ほごしゃ)確認"
+        }
+    }
+
+    private var questionText: String {
+        switch language {
+        case .chinese:
+            return "請回答：\(num1) + \(num2) = ?"
+        case .english:
+            return "Please answer: \(num1) + \(num2) = ?"
+        case .japanese:
+            return "こたえてね：\(num1) + \(num2) = ?"
+        }
+    }
+
+    private var answerPlaceholder: String {
+        switch language {
+        case .chinese:
+            return "答案"
+        case .english:
+            return "Answer"
+        case .japanese:
+            return "こたえ"
+        }
+    }
+
+    private var errorText: String {
+        switch language {
+        case .chinese:
+            return "答案錯誤，請再試一次"
+        case .english:
+            return "Wrong answer, try again."
+        case .japanese:
+            return "ちがうよ。もう一度(いちど)ためしてね"
+        }
+    }
+
+    private var cancelText: String {
+        switch language {
+        case .chinese:
+            return "取消"
+        case .english:
+            return "Cancel"
+        case .japanese:
+            return "キャンセル"
+        }
+    }
+
+    private var confirmText: String {
+        switch language {
+        case .chinese:
+            return "確認"
+        case .english:
+            return "Confirm"
+        case .japanese:
+            return "確認"
         }
     }
 }
 
 struct LoadingCoverView: View {
     @State private var isRotating = false
-    @State private var currentLanguage: AppLanguage = {
-        let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
-        if preferredLang.hasPrefix("zh") {
-            return .chinese
-        } else if preferredLang.hasPrefix("ja") {
-            return .japanese
-        } else {
-            return .english
-        }
-    }()
-    
+    @State private var isPulsing = false
+    @State private var orbitRotation: Double = 0
+    @State private var opacity: Double = 0
+    @State private var layoutSize: CGSize = .zero
+
     var body: some View {
-        let localizedText = LocalizedStrings(language: currentLanguage)
-        ZStack {
-            Image("KnowledgeBackground").resizable().scaledToFill().ignoresSafeArea().opacity(0.3)
-            LinearGradient(gradient: Gradient(colors: [Color.white.opacity(0.95), Color.SoftBlue.opacity(0.8)]), startPoint: .top, endPoint: .bottom).ignoresSafeArea()
-            VStack(spacing: 30) {
-                Image(systemName: "book.circle.fill").font(.system(size: 90)).foregroundColor(.MagicBlue).rotationEffect(Angle(degrees: isRotating ? 360 : 0)).animation(Animation.linear(duration: 3.0).repeatForever(autoreverses: false), value: isRotating).onAppear { isRotating = true }.shadow(color: .MagicBlue.opacity(0.3), radius: 10)
-                ProgressView().progressViewStyle(CircularProgressViewStyle(tint: .MagicBlue)).scaleEffect(1.8)
-                VStack(spacing: 10) {
-                    Text(localizedText.loadingTitle).font(.system(size: 22, weight: .bold, design: .rounded)).foregroundColor(.DarkText)
-                    Text(localizedText.loadingSubtitle).font(.system(size: 16, weight: .medium, design: .rounded)).foregroundColor(.gray)
+        GeometryReader { geo in
+            let currentSize = layoutSize == .zero ? geo.size : layoutSize
+            let safeWidth = max(1, currentSize.width)
+            let safeHeight = max(1, currentSize.height)
+            let isLandscape = safeWidth > safeHeight
+            // 以最短邊作為基準，確保直式也不會超出畫面
+            let minSide = max(1, min(safeWidth, safeHeight))
+            let baseScale: CGFloat = isLandscape ? 0.85 : 1.0
+            let ringOuterSize = minSide * 0.50 * baseScale   // 外環尺寸
+            let ringInnerSize = minSide * 0.43 * baseScale   // 中環尺寸
+            let globeSize     = minSide * 0.28 * baseScale   // 地球尺寸
+            let orbitRadius   = ringOuterSize * 0.43 // 星星軌道半徑
+
+            ZStack {
+                // 背景層
+                Image("KnowledgeBackground")
+                    .resizable()
+                    .scaledToFill()
+                    .ignoresSafeArea()
+                    .opacity(0.3)
+
+                LinearGradient(
+                    gradient: Gradient(colors: [Color.white.opacity(0.95), Color.SoftBlue.opacity(0.8)]),
+                    startPoint: .top,
+                    endPoint: .bottom
+                )
+                .ignoresSafeArea()
+
+                // 主要內容
+                VStack(spacing: minSide * (isLandscape ? 0.05 : 0.08)) {
+                    ZStack {
+                        // 外圍光環 (象徵知識傳播)
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.MagicBlue.opacity(0.3), .purple.opacity(0.2)]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: max(2, minSide * 0.008)
+                            )
+                            .frame(width: ringOuterSize, height: ringOuterSize)
+                            .scaleEffect(isPulsing ? 1.08 : 1.0)
+                            .opacity(isPulsing ? 0.35 : 0.6)
+                            .animation(
+                                Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true),
+                                value: isPulsing
+                            )
+
+                        // 中層光環
+                        Circle()
+                            .stroke(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.green.opacity(0.3), .blue.opacity(0.2)]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                ),
+                                lineWidth: max(1.5, minSide * 0.006)
+                            )
+                            .frame(width: ringInnerSize, height: ringInnerSize)
+                            .scaleEffect(isPulsing ? 1.06 : 1.0)
+                            .opacity(isPulsing ? 0.45 : 0.7)
+                            .animation(
+                                Animation.easeInOut(duration: 2.0).repeatForever(autoreverses: true).delay(0.25),
+                                value: isPulsing
+                            )
+
+                        // 主要地球圖示（可替換為自家資產 Image("AppGlobe")）
+                        Image(systemName: "globe.asia.australia.fill")
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: globeSize, height: globeSize)
+                            .foregroundStyle(
+                                LinearGradient(
+                                    gradient: Gradient(colors: [.blue, .MagicBlue, .green]),
+                                    startPoint: .topLeading,
+                                    endPoint: .bottomTrailing
+                                )
+                            )
+                            .rotationEffect(Angle(degrees: isRotating ? 360 : 0))
+                            .animation(
+                                Animation.linear(duration: 8.0).repeatForever(autoreverses: false),
+                                value: isRotating
+                            )
+                            .shadow(color: .MagicBlue.opacity(0.35), radius: minSide * 0.03, x: 0, y: minSide * 0.01)
+
+                        // 環繞的小星星 (象徵多語言、多文化)
+                        ForEach(0..<3, id: \.self) { index in
+                            Image(systemName: "star.fill")
+                                .resizable()
+                                .scaledToFit()
+                                .frame(width: max(10, minSide * 0.04), height: max(10, minSide * 0.04))
+                                .foregroundColor(.yellow.opacity(0.85))
+                                .offset(x: orbitRadius)
+                                .rotationEffect(Angle(degrees: orbitRotation + Double(index) * 120))
+                                .animation(
+                                    Animation.linear(duration: 4.0).repeatForever(autoreverses: false),
+                                    value: orbitRotation
+                                )
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+                    .opacity(opacity)
+                    .scaleEffect(opacity)
+
+                    // 載入指示器
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .MagicBlue))
+                        .scaleEffect(max(1.1, minSide * 0.0025))
+                        .opacity(opacity)
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.horizontal, max(16, minSide * 0.05))
+                .padding(.vertical, max(16, minSide * (isLandscape ? 0.03 : 0.05)))
+            }
+            .onAppear {
+                // 淡入動畫
+                withAnimation(.easeOut(duration: 0.3)) {
+                    opacity = 1.0
+                }
+                // 啟動動畫
+                isRotating = true
+                isPulsing = true
+                withAnimation { orbitRotation = 360 }
+            }
+            .onAppear {
+                layoutSize = geo.size
+            }
+            .onChange(of: geo.size) { _, newSize in
+                let widthDelta = abs(layoutSize.width - newSize.width)
+                let heightDelta = abs(layoutSize.height - newSize.height)
+                guard widthDelta > 1 || heightDelta > 1 else { return }
+                withAnimation(.easeOut(duration: 0.25)) {
+                    layoutSize = newSize
                 }
             }
         }
+        .ignoresSafeArea() // 確保覆蓋到全畫面
     }
 }
 
@@ -1358,14 +2426,82 @@ extension String {
         return result
     }
     
-    func cleanForTTS() -> String {
+    func cleanForTTS(language: AppLanguage = .chinese) -> String {
         var text = self
+        
+        print("🎤 原始文字（\(language.rawValue)）：\(text)")
+        
+        // 移除 Markdown 格式
         text = text.replacingOccurrences(of: "**", with: "")
         text = text.replacingOccurrences(of: "#", with: "")
         text = text.replacingOccurrences(of: "`", with: "")
-        text = text.unicodeScalars.filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }.reduce("") { $0 + String($1) }
-        text = text.replacingOccurrences(of: "\n", with: "，")
-        return text
+        
+        // 🇯🇵 日文專用處理：移除振假名括號，避免奇怪發音
+        if language == .japanese {
+            // 1. 移除 Emoji（但保留日文字符）
+            var cleanedText = ""
+            for scalar in text.unicodeScalars {
+                // 保留非 Emoji 的字符（包括日文、中文、標點等）
+                if !scalar.properties.isEmoji || !scalar.properties.isEmojiPresentation {
+                    cleanedText.append(Character(scalar))
+                }
+            }
+            text = cleanedText
+            print("🇯🇵 移除 Emoji 後：\(text)")
+            
+            // 2. 移除 ruby 標記（保留括號外的文字）
+            do {
+                let rubyRegex = try NSRegularExpression(pattern: "<ruby>(.*?)<rt>.*?</rt></ruby>", options: [.dotMatchesLineSeparators, .caseInsensitive])
+                let range = NSRange(text.startIndex..., in: text)
+                text = rubyRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+            } catch {
+                print("❌ ruby 正則表達式錯誤：\(error)")
+            }
+            text = text.replacingOccurrences(of: "<ruby>", with: "")
+            text = text.replacingOccurrences(of: "</ruby>", with: "")
+            text = text.replacingOccurrences(of: "<rt>", with: "")
+            text = text.replacingOccurrences(of: "</rt>", with: "")
+            
+            // 2. 移除振假名括號內容（保留括號外的文字）
+            // 例如：動物(どうぶつ) → 動物
+            // 例如：最初(さいしょ) → 最初
+            do {
+                // 匹配括號和裡面的平假名、片假名
+                let regex = try NSRegularExpression(pattern: "\\([ぁ-んァ-ヴー]+\\)", options: [])
+                let range = NSRange(text.startIndex..., in: text)
+                text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+                print("🇯🇵 移除振假名括號後：\(text)")
+            } catch {
+                print("❌ 正則表達式錯誤：\(error)")
+            }
+            
+            // 3. 移除波浪號（可能造成奇怪發音）
+            text = text.replacingOccurrences(of: "〜", with: "")
+            text = text.replacingOccurrences(of: "～", with: "")
+            
+            // 4. 統一標點後的停頓
+            text = text.replacingOccurrences(of: "。", with: "。 ")
+            text = text.replacingOccurrences(of: "、", with: "、 ")
+            text = text.replacingOccurrences(of: "？", with: "？ ")
+            text = text.replacingOccurrences(of: "！", with: "！ ")
+            
+            // 5. 移除換行符號
+            text = text.replacingOccurrences(of: "\n", with: " ")
+            
+            // 6. 移除過多的連續空格
+            while text.contains("  ") {
+                text = text.replacingOccurrences(of: "  ", with: " ")
+            }
+            
+            print("🇯🇵 日文 TTS 最終文字：\(text)")
+        } else {
+            // 中文和英文：先移除 Emoji，再處理換行
+            text = text.unicodeScalars.filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }.reduce("") { $0 + String($1) }
+            text = text.replacingOccurrences(of: "\n", with: "，")
+        }
+        
+        let result = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("✅ TTS 最終輸入（長度 \(result.count)）：\(result)")
+        return result
     }
 }
-

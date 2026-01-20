@@ -13,6 +13,15 @@
 		4C6B3DEA2F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C6B3DE92F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md */; };
 		4C6B3DEC2F1E64DE00B6965A /* FuriganaText.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4C6B3DEB2F1E64DE00B6965A /* FuriganaText.swift */; };
 		4C6B3DEE2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C6B3DED2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md */; };
+		4C996F322F1F34B900F96AEB /* TTS_SYNC_OPTIMIZATION_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F312F1F34B800F96AEB /* TTS_SYNC_OPTIMIZATION_COMPLETE.md */; };
+		4C996F342F1F34F500F96AEB /* TTS_SYNC_TEST_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F332F1F34F500F96AEB /* TTS_SYNC_TEST_GUIDE.md */; };
+		4C996F362F1F35DF00F96AEB /* SUBTITLE_SYNC_IMPROVEMENTS.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F352F1F35DF00F96AEB /* SUBTITLE_SYNC_IMPROVEMENTS.md */; };
+		4C996F382F1F361B00F96AEB /* TESTING_GUIDE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F372F1F361B00F96AEB /* TESTING_GUIDE.md */; };
+		4C996F3A2F1F365B00F96AEB /* CHANGELOG.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F392F1F365B00F96AEB /* CHANGELOG.md */; };
+		4C996F3C2F1F367800F96AEB /* QUICK_REFERENCE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F3B2F1F367800F96AEB /* QUICK_REFERENCE.md */; };
+		4C996F3E2F1F36B400F96AEB /* SYNC_OPTIMIZATIONS_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F3D2F1F36B400F96AEB /* SYNC_OPTIMIZATIONS_COMPLETE.md */; };
+		4C996F402F1F373000F96AEB /* OPTIMIZATION_IMPLEMENTATION_COMPLETE.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F3F2F1F373000F96AEB /* OPTIMIZATION_IMPLEMENTATION_COMPLETE.md */; };
+		4C996F422F1F375800F96AEB /* TESTING_GUIDE 2.md in Resources */ = {isa = PBXBuildFile; fileRef = 4C996F412F1F375800F96AEB /* TESTING_GUIDE 2.md */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -40,6 +49,15 @@
 		4C9451252EDD73FA00A785B8 /* WonderKidAI.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = WonderKidAI.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C9451322EDD73FB00A785B8 /* WonderKidAITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WonderKidAITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		4C94513C2EDD73FB00A785B8 /* WonderKidAIUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = WonderKidAIUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		4C996F312F1F34B800F96AEB /* TTS_SYNC_OPTIMIZATION_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TTS_SYNC_OPTIMIZATION_COMPLETE.md; sourceTree = "<group>"; };
+		4C996F332F1F34F500F96AEB /* TTS_SYNC_TEST_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TTS_SYNC_TEST_GUIDE.md; sourceTree = "<group>"; };
+		4C996F352F1F35DF00F96AEB /* SUBTITLE_SYNC_IMPROVEMENTS.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SUBTITLE_SYNC_IMPROVEMENTS.md; sourceTree = "<group>"; };
+		4C996F372F1F361B00F96AEB /* TESTING_GUIDE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = TESTING_GUIDE.md; sourceTree = "<group>"; };
+		4C996F392F1F365B00F96AEB /* CHANGELOG.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = CHANGELOG.md; sourceTree = "<group>"; };
+		4C996F3B2F1F367800F96AEB /* QUICK_REFERENCE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = QUICK_REFERENCE.md; sourceTree = "<group>"; };
+		4C996F3D2F1F36B400F96AEB /* SYNC_OPTIMIZATIONS_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = SYNC_OPTIMIZATIONS_COMPLETE.md; sourceTree = "<group>"; };
+		4C996F3F2F1F373000F96AEB /* OPTIMIZATION_IMPLEMENTATION_COMPLETE.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = OPTIMIZATION_IMPLEMENTATION_COMPLETE.md; sourceTree = "<group>"; };
+		4C996F412F1F375800F96AEB /* TESTING_GUIDE 2.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = "TESTING_GUIDE 2.md"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -111,6 +129,15 @@
 				4C6B3DE92F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md */,
 				4C6B3DEB2F1E64DE00B6965A /* FuriganaText.swift */,
 				4C6B3DED2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md */,
+				4C996F312F1F34B800F96AEB /* TTS_SYNC_OPTIMIZATION_COMPLETE.md */,
+				4C996F332F1F34F500F96AEB /* TTS_SYNC_TEST_GUIDE.md */,
+				4C996F352F1F35DF00F96AEB /* SUBTITLE_SYNC_IMPROVEMENTS.md */,
+				4C996F372F1F361B00F96AEB /* TESTING_GUIDE.md */,
+				4C996F392F1F365B00F96AEB /* CHANGELOG.md */,
+				4C996F3B2F1F367800F96AEB /* QUICK_REFERENCE.md */,
+				4C996F3D2F1F36B400F96AEB /* SYNC_OPTIMIZATIONS_COMPLETE.md */,
+				4C996F3F2F1F373000F96AEB /* OPTIMIZATION_IMPLEMENTATION_COMPLETE.md */,
+				4C996F412F1F375800F96AEB /* TESTING_GUIDE 2.md */,
 			);
 			sourceTree = "<group>";
 		};
@@ -249,8 +276,17 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				4C996F3E2F1F36B400F96AEB /* SYNC_OPTIMIZATIONS_COMPLETE.md in Resources */,
+				4C996F3C2F1F367800F96AEB /* QUICK_REFERENCE.md in Resources */,
+				4C996F342F1F34F500F96AEB /* TTS_SYNC_TEST_GUIDE.md in Resources */,
 				4C6B3DE82F1E60F400B6965A /* INTRO_BUTTON_FEATURE.md in Resources */,
+				4C996F3A2F1F365B00F96AEB /* CHANGELOG.md in Resources */,
+				4C996F402F1F373000F96AEB /* OPTIMIZATION_IMPLEMENTATION_COMPLETE.md in Resources */,
+				4C996F322F1F34B900F96AEB /* TTS_SYNC_OPTIMIZATION_COMPLETE.md in Resources */,
+				4C996F422F1F375800F96AEB /* TESTING_GUIDE 2.md in Resources */,
+				4C996F382F1F361B00F96AEB /* TESTING_GUIDE.md in Resources */,
 				4C6B3DEA2F1E648900B6965A /* THREE_OPTIMIZATIONS_COMPLETE.md in Resources */,
+				4C996F362F1F35DF00F96AEB /* SUBTITLE_SYNC_IMPROVEMENTS.md in Resources */,
 				4C6B3DEE2F1E654000B6965A /* FURIGANA_IMPLEMENTATION.md in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

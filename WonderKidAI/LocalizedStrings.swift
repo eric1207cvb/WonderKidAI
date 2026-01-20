@@ -9,7 +9,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "足跡"
         case .english: return "History"
-        case .japanese: return "足跡"
+        case .japanese: return "履歴"
         }
     }
     
@@ -17,7 +17,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "安安老師上線中"
         case .english: return "Teacher An-An is Online"
-        case .japanese: return "あんあん先生オンライン中"
+        case .japanese: return "あんあん先生、いるよ〜"
         }
     }
     
@@ -25,7 +25,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "老師休息中 (點我叫醒)"
         case .english: return "Teacher is Sleeping (Tap)"
-        case .japanese: return "先生は寝ています（タップ）"
+        case .japanese: return "先生おねむ中（起こしてね）"
         }
     }
     
@@ -33,7 +33,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "正在找老師..."
         case .english: return "Connecting..."
-        case .japanese: return "接続中..."
+        case .japanese: return "先生をさがしてるよ..."
         }
     }
     
@@ -42,7 +42,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "安安老師在聽囉..."
         case .english: return "I'm listening..."
-        case .japanese: return "聞いていますよ..."
+        case .japanese: return "ちゃんと聞いてるよ〜"
         }
     }
     
@@ -50,7 +50,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "點一下，開始說話"
         case .english: return "Tap to speak"
-        case .japanese: return "タップして話してね"
+        case .japanese: return "タンっ！してお話しよう"
         }
     }
     
@@ -58,7 +58,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "準備中..."
         case .english: return "Preparing..."
-        case .japanese: return "準備中..."
+        case .japanese: return "じゅんび中..."
         }
     }
     
@@ -66,7 +66,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "點一下取消"
         case .english: return "Tap to cancel"
-        case .japanese: return "タップでキャンセル"
+        case .japanese: return "タンっ！でやめられるよ"
         }
     }
     
@@ -74,7 +74,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "點紅色手手可以打斷老師喔！"
         case .english: return "Tap the red hand to interrupt!"
-        case .japanese: return "赤い手をタップで中断できるよ！"
+        case .japanese: return "赤いおててをタンっ！で止められるよ"
         }
     }
     
@@ -108,7 +108,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "🔒 今天的免費次數用完囉！\n請爸爸媽媽幫忙解鎖～"
         case .english: return "🔒 Free quota used up today!\nAsk parents to unlock."
-        case .japanese: return "🔒 今日の無料回数を使い切りました！\nパパママに解除してもらってね～"
+        case .japanese: return "🔒 今日(きょう)の無料(むりょう)ぶん、ぜんぶ使(つか)っちゃった！\nパパママに聞(き)いてみてね〜"
         }
     }
     
@@ -116,7 +116,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "❌ 啟動失敗"
         case .english: return "❌ Start Failed"
-        case .japanese: return "❌ 起動失敗"
+        case .japanese: return "❌ あれれ、うまくいかなかったよ"
         }
     }
     
@@ -124,7 +124,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "🤔 太小聲囉～"
         case .english: return "🤔 Too quiet~"
-        case .japanese: return "🤔 声が小さいよ～"
+        case .japanese: return "🤔 声(こえ)が小(ちい)さいかも〜"
         }
     }
     
@@ -132,7 +132,23 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "🥤 安安老師去喝口水，馬上回來～\n(請檢查網路，再試一次喔！)"
         case .english: return "🥤 Teacher An-An is taking a water break.\n(Please check connection and try again!)"
-        case .japanese: return "🥤 あんあん先生、お水を飲んできます～\n（ネット接続を確認してね！）"
+        case .japanese: return "🥤 あんあん先生、お水(みず)を飲(の)んでくるね〜\n（インターネットを確認(かくにん)してみて！）"
+        }
+    }
+
+    var permissionRequest: String {
+        switch language {
+        case .chinese: return "請允許麥克風與語音辨識權限，才能開始錄音喔！"
+        case .english: return "Please allow microphone and speech recognition to start recording."
+        case .japanese: return "マイクと音声認識の許可が必要だよ。"
+        }
+    }
+
+    var permissionDenied: String {
+        switch language {
+        case .chinese: return "麥克風或語音辨識權限被拒絕了，請到設定開啟。"
+        case .english: return "Microphone or speech recognition permission is denied. Please enable it in Settings."
+        case .japanese: return "許可がオフになっているよ。設定でオンにしてね。"
         }
     }
     
@@ -140,7 +156,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "好喔！那我先暫停～"
         case .english: return "Okay! Cancelled."
-        case .japanese: return "わかった！一時停止するね～"
+        case .japanese: return "わかった！ちょっと待(ま)ってるね〜"
         }
     }
     
@@ -148,7 +164,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "🔄 老師，可以講簡單一點嗎？"
         case .english: return "🔄 Teacher, simpler please?"
-        case .japanese: return "🔄 先生、もっと簡単に教えて？"
+        case .japanese: return "🔄 先生(せんせい)、もっとやさしく教(おし)えて？"
         }
     }
     
@@ -185,7 +201,7 @@ struct LocalizedStrings {
         case .english:
             return "Hi! I am Teacher An-An.\nWhat would you like to know?"
         case .japanese:
-            return "こんにちは！あんあん先生だよ～\n何が知りたい？"
+            return "やっほー！あんあん先生だよ〜\n何(なに)が知(し)りたい？"
         }
     }
     
@@ -196,7 +212,7 @@ struct LocalizedStrings {
         case .english:
             return "Hello! I am Teacher An-An, your first AI encyclopedia. You can ask me about nature, math, geography, space, history, or anything in your daily life. I am here to help you!"
         case .japanese:
-            return "こんにちは！あんあん先生です。あなたの最初のAI百科事典だよ。自然、算数、地理、宇宙、言葉、歴史、日常生活のことなど、何でも聞いてね！"
+            return "やっほー！あんあん先生だよ。みんなの最初(さいしょ)のAI百科事典(ひゃっかじてん)なんだ。自然(しぜん)、算数(さんすう)、地理(ちり)、宇宙(うちゅう)、言葉(ことば)、歴史(れきし)、毎日(まいにち)のこと、なんでも聞(き)いてね！"
         }
     }
     
@@ -204,7 +220,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "👋 初次見面！"
         case .english: return "👋 Hello!"
-        case .japanese: return "👋 はじめまして！"
+        case .japanese: return "👋 はじめまして〜！"
         }
     }
     
@@ -233,13 +249,13 @@ struct LocalizedStrings {
             """
         case .japanese:
             return """
-            子どもの質問：「\(question)」について。
-            子どもが「わからない」と言っています。
-            次のようにしてください：
-            1. 前の答えを絶対に繰り返さないでください。
-            2. 「日常生活の例」や「おとぎ話のたとえ」を使って説明してください。
-            3. 3歳の子どもに話すように、ゆっくり優しく。
-            4. 「大丈夫だよ、想像してみよう...」で始めてください。
+            子(こ)どもの質問(しつもん)：「\(question)」について。
+            子(こ)どもが「わからない」って言(い)ってるよ。
+            次(つぎ)のようにしてあげてね：
+            1. さっきの答(こた)えは、ぜったい繰(く)り返(かえ)さないでね。
+            2. 「おうちにあるもの」や「むかし話(ばなし)」でたとえて説明(せつめい)してあげて。
+            3. 3歳(さい)の子(こ)に話(はな)すみたいに、ゆっくりやさしく。
+            4. 「だいじょうぶだよ、いっしょに考(かんが)えてみよう...」って始(はじ)めてね。
             """
         }
     }
@@ -249,7 +265,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "安安老師準備中..."
         case .english: return "Teacher An-An is Preparing..."
-        case .japanese: return "あんあん先生準備中..."
+        case .japanese: return "あんあん先生、じゅんび中..."
         }
     }
     
@@ -257,7 +273,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "正在連接神奇魔法書櫃 📖"
         case .english: return "Connecting to the Magic Library 📖"
-        case .japanese: return "魔法の本棚に接続中 📖"
+        case .japanese: return "魔法(まほう)の本棚(ほんだな)につないでるよ 📖"
         }
     }
     
@@ -266,7 +282,7 @@ struct LocalizedStrings {
         switch language {
         case .chinese: return "安安老師正在翻書找答案..."
         case .english: return "Checking the magic book..."
-        case .japanese: return "あんあん先生が本を調べています..."
+        case .japanese: return "あんあん先生、本(ほん)をめくってるよ..."
         }
     }
     

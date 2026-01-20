@@ -3,6 +3,12 @@ import Speech
 import AVFoundation
 import AudioToolbox
 
+enum SpeechPermissionState {
+    case authorized
+    case denied
+    case notDetermined
+}
+
 class SpeechService: NSObject {
     static let shared = SpeechService()
     
@@ -23,6 +29,43 @@ class SpeechService: NSObject {
         // 初始化時預設語言
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "zh-TW"))
     }
+
+    func permissionState() -> SpeechPermissionState {
+        let speechStatus = SFSpeechRecognizer.authorizationStatus()
+        let recordStatus = AVAudioSession.sharedInstance().recordPermission
+        
+        if speechStatus == .authorized && recordStatus == .granted {
+            return .authorized
+        }
+        
+        if speechStatus == .denied || speechStatus == .restricted || recordStatus == .denied {
+            return .denied
+        }
+        
+        return .notDetermined
+    }
+
+    func requestPermissions(completion: @escaping (Bool) -> Void) {
+        let group = DispatchGroup()
+        var speechGranted = false
+        var recordGranted = false
+        
+        group.enter()
+        SFSpeechRecognizer.requestAuthorization { status in
+            speechGranted = (status == .authorized)
+            group.leave()
+        }
+        
+        group.enter()
+        AVAudioSession.sharedInstance().requestRecordPermission { granted in
+            recordGranted = granted
+            group.leave()
+        }
+        
+        group.notify(queue: .main) {
+            completion(speechGranted && recordGranted)
+        }
+    }
     
     // MARK: - 🔥 核心修正：統一的 AudioSession 設定
     // (這就是 Xcode 說找不到的那個功能，現在補上了！)
@@ -31,7 +74,7 @@ class SpeechService: NSObject {
             let session = AVAudioSession.sharedInstance()
             if isRecording {
                 // 錄音模式：同時允許播放與錄音，並強制聲音從喇叭出來
-                try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetooth])
+                try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
             } else {
                 // 播放模式：專注於播放
                 try session.setCategory(.playback, mode: .default)
@@ -48,6 +91,11 @@ class SpeechService: NSObject {
         // 1. 設定音訊環境
         configureAudioSession(isRecording: true)
         
+        #if DEBUG
+        let authStatus = SFSpeechRecognizer.authorizationStatus()
+        print("[STT] authStatus=\(authStatus.rawValue)")
+        #endif
+        
         // 2. 播放提示音 (1113: Begin Recording)
         AudioServicesPlaySystemSound(1113)
         
@@ -63,6 +111,11 @@ class SpeechService: NSObject {
         }
         
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: localeID))
+        #if DEBUG
+        if speechRecognizer?.isAvailable == false {
+            print("[STT] recognizer unavailable for locale=\(localeID)")
+        }
+        #endif
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else { return }
@@ -92,6 +145,12 @@ class SpeechService: NSObject {
                     self.resetSilenceTimer()
                 }
                 isFinal = result.isFinal
+            }
+            
+            if let error = error {
+                #if DEBUG
+                print("[STT] recognition error: \(error)")
+                #endif
             }
             
             if error != nil || isFinal {
@@ -144,5 +203,6 @@ class SpeechService: NSObject {
     
     func requestAuthorization() {
         SFSpeechRecognizer.requestAuthorization { _ in }
+        AVAudioSession.sharedInstance().requestRecordPermission { _ in }
     }
 }

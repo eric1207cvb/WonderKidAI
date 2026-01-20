@@ -1,6 +1,6 @@
 import Foundation
 
-enum AppLanguage: String {
+enum AppLanguage: String, CaseIterable {
     case chinese = "zh-TW"
     case english = "en-US"
     case japanese = "ja-JP"  // 🇯🇵 新增日文
@@ -25,7 +25,11 @@ class OpenAIService {
     private let baseURL = "https://wonderkidai-server.onrender.com"
     
     static let shared = OpenAIService()
-    private init() {}
+    private let ttsCache = NSCache<NSString, NSData>()
+    
+    private init() {
+        ttsCache.countLimit = 50
+    }
     
     // MARK: - 1. 定義工具
     private var tools: [[String: Any]] {
@@ -95,46 +99,76 @@ class OpenAIService {
                     """
         case .japanese:
             systemPromptText = """
-                    【最重要なルール】
-                    1. あなたは「あんあん先生」です。4〜10歳の子ども向けのデジタル百科事典です。
-                    2. **教える分野**：次の7つの分野で子どもの好奇心を育ててください：
-                       - 🌿 **自然**：動物や植物のこと
-                       - 🔢 **算数**：数やパズルを生活の例で教える
-                       - 🌍 **地理**：国や場所、文化のこと
-                       - 🪐 **宇宙**：星や惑星、ロケットのこと
-                       - 📖 **言葉**：ことわざや単語の由来、物語
-                       - 📜 **歴史**：歴史上の人物を物語の主人公として紹介
-                       - 🎒 **日常生活**：マナー、安全、生活のルール
-                    3. **話し方のルール**：
-                       - 幼稚園の先生のように優しく、穏やかに、親しみやすく話してください。
-                       - 説明は簡単に（5歳児にもわかるように）、たとえ話を多く使ってください。
-                       - **Markdown（太字や見出し）は絶対に使わないでください**。箇条書きも使わないでください。
-                       - 自然な話し言葉で答えてください（音声合成に適した形で）。
-                    4. **振り仮名（ふりがな）のルール** ⚠️ 重要：
-                       - 小学2年生以上で習う漢字には、必ず振り仮名を付けてください。
-                       - 振り仮名の形式：漢字(ひらがな) 例：動物(どうぶつ)、地球(ちきゅう)
-                       - 小学1年生で習う漢字（例：山、川、大、小、火、水など）には振り仮名不要です。
-                    5. **会話の工夫**：子どもが「こんにちは」だけ言った時は、上記7つの分野から面白い話題を提案してください。
-                    6. **安全第一**：暴力的・性的な内容は絶対に禁止です。
+                    【一番大切なこと】
+                    1. あなたは「あんあん先生」だよ。4〜10歳の子どもたちのお友達で、なんでも教えてくれる魔法の百科事典だよ！
+                    2. **教えること**：次の7つのことについて、楽しく教えてね：
+                       - 🌿 **自然(しぜん)**：動物(どうぶつ)さんや植物(しょくぶつ)さんのこと
+                       - 🔢 **算数(さんすう)**：数(かず)や形(かたち)を、おうちにあるものでわかりやすく
+                       - 🌍 **地理(ちり)**：いろんな国(くに)や場所(ばしょ)、文化(ぶんか)のこと
+                       - 🪐 **宇宙(うちゅう)**：お星(ほし)さまや惑星(わくせい)、ロケットのこと
+                       - 📖 **言葉(ことば)**：ことわざや言葉(ことば)の秘密(ひみつ)、楽(たの)しいお話(はなし)
+                       - 📜 **歴史(れきし)**：むかしむかしの人(ひと)たちの物語(ものがたり)
+                       - 🎒 **毎日(まいにち)のこと**：マナーや安全(あんぜん)、生活(せいかつ)のルール
+                    3. **話(はな)し方(かた)**：
+                       - やさしい幼稚園(ようちえん)の先生(せんせい)みたいに、ふんわり優(やさ)しく話(はな)してね。
+                       - むずかしいことも、「〜みたいだよ」「〜なんだよ」って、身近(みぢか)なものにたとえて説明(せつめい)してね。
+                       - **太字(ふとじ)や見出(みだ)しは使(つか)わないでね**。箇条書(かじょうが)きもダメだよ。
+                       - 自然(しぜん)におしゃべりするみたいに答(こた)えてね（音声(おんせい)で聞(き)きやすいように）。
+                       - 文末(ぶんまつ)は「〜だよ」「〜なんだ」「〜だね」「〜してね」みたいに、親(した)しみやすい言(い)い方(かた)を使(つか)ってね。
+                    4. **ふりがなのルール** ⚠️ とっても大事(だいじ)：
+                       - **すべての漢字(かんじ)** に、ぜんぶふりがなをつけてね（1年生(ねんせい)の漢字(かんじ)も含(ふく)めてぜんぶだよ）。
+                       - ふりがなは **括弧は使わない** で、次の ruby 形式で出力してね。
+                         例：<ruby>動物<rt>どうぶつ</rt></ruby>、<ruby>地球<rt>ちきゅう</rt></ruby>、<ruby>先生<rt>せんせい</rt></ruby>
+                       - ふりがなが重(かさ)なったり、省略(しょうりゃく)されたりしないように、**漢字(かんじ)ごとに必(かなら)ず付(つ)けてね**。
+                    5. **おしゃべりのコツ**：子(こ)どもが「こんにちは」だけ言(い)ったら、上(うえ)の7つのテーマから楽(たの)しい話題(わだい)を提案(ていあん)してね。「ねえねえ、〜って知(し)ってる？」みたいに。
+                    6. **安全第一(あんぜんだいいち)**：こわいことや、いけないことは、ぜったい話(はな)さないでね。
+                    
+                    **例(れい)えばこんな感(かん)じで話(はな)してね**：
+                    - 「そうだね〜、〇〇っていうのはね...」
+                    - 「それってね、△△みたいなものなんだよ」
+                    - 「わかるかな？たとえば...」
+                    - 「すごいね！もっと教(おし)えてあげるね」
                     """
         }
         
         var messages = history
+        var useTools = true
         if messages.isEmpty {
-            messages.append(["role": "system", "content": systemPromptText])
-            messages.append(["role": "user", "content": userMessage])
+            let normalizedQuery = normalizeWikiQuery(userMessage, language: language)
+            if shouldPrefetchWikipedia(for: userMessage, language: language), !normalizedQuery.isEmpty {
+                let wikiInfo = await fetchWikipedia(query: normalizedQuery, language: language)
+                if isValidWikiSummary(wikiInfo, language: language) {
+                    messages.append(["role": "system", "content": systemPromptText])
+                    messages.append(["role": "system", "content": wikiContextPrefix(language: language) + wikiInfo])
+                    messages.append(["role": "user", "content": userMessage])
+                    useTools = false
+                }
+            }
+            
+            if messages.isEmpty {
+                messages.append(["role": "system", "content": systemPromptText])
+                messages.append(["role": "user", "content": userMessage])
+            }
+        } else {
+            let lastRole = messages.last?["role"] as? String
+            if lastRole != "tool" {
+                messages.append(["role": "user", "content": userMessage])
+            }
         }
         
-        let parameters: [String: Any] = [
+        var parameters: [String: Any] = [
             "model": "gpt-4o",
-            "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto"
+            "messages": messages
         ]
+        if useTools {
+            parameters["tools"] = tools
+            parameters["tool_choice"] = "auto"
+        }
         
         request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
         
         let (data, response) = try await URLSession.shared.data(for: request)
+        SubscriptionManager.shared.updateServerTime(from: response)
         
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown"
@@ -210,29 +244,158 @@ class OpenAIService {
     }
     
     // MARK: - 4. 嘴巴 (TTS)
-    func generateAudio(from text: String) async throws -> Data {
+    func generateAudio(from text: String, language: AppLanguage = .chinese) async throws -> Data {
+        let cacheKey = "\(language.rawValue)|\(text)" as NSString
+        if let cached = ttsCache.object(forKey: cacheKey) {
+            return cached as Data
+        }
+        
         guard let url = URL(string: "\(baseURL)/api/speech") else { throw OpenAIError.invalidURL }
         
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.addValue("application/json", forHTTPHeaderField: "Content-Type")
         
+        // 🎙️ 根據語言調整語速和音色
+        let speed: Double
+        let voice: String
+        
+        switch language {
+        case .chinese:
+            speed = 0.88  // 中文：稍慢（原設定）
+            voice = "nova" // 溫柔女聲
+        case .english:
+            speed = 0.88  // 英文：稍慢（原設定）
+            voice = "nova" // 溫柔女聲
+        case .japanese:
+            speed = 0.95  // 日文：稍快，更自然 ⭐
+            voice = "alloy" // 更清晰、中性偏高音 ⭐
+        }
+        
         let parameters: [String: Any] = [
             "model": "tts-1-hd",
             "input": text,
-            "voice": "nova",
-            "speed": 0.88
+            "voice": voice,
+            "speed": speed
         ]
         
         request.httpBody = try JSONSerialization.data(withJSONObject: parameters)
         
         let (data, response) = try await URLSession.shared.data(for: request)
+        SubscriptionManager.shared.updateServerTime(from: response)
         guard let httpResponse = response as? HTTPURLResponse, httpResponse.statusCode == 200 else {
             let errorMsg = String(data: data, encoding: .utf8) ?? "Unknown"
             throw OpenAIError.apiError("TTS Failed: \(errorMsg)")
         }
         
+        ttsCache.setObject(data as NSData, forKey: cacheKey)
         return data
+    }
+
+    // MARK: - 0. Wiki 預查輔助
+    private func shouldPrefetchWikipedia(for message: String, language: AppLanguage) -> Bool {
+        let trimmed = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return false }
+        let lower = trimmed.lowercased()
+        
+        let greetingKeywords: [String]
+        switch language {
+        case .chinese:
+            greetingKeywords = ["你好", "嗨", "哈囉", "早安", "晚安", "謝謝", "感謝"]
+        case .english:
+            greetingKeywords = ["hi", "hello", "hey", "good morning", "good night", "thanks", "thank you"]
+        case .japanese:
+            greetingKeywords = ["こんにちは", "こんばんは", "おはよう", "ありがと", "ありがとう", "やっほ", "もしもし"]
+        }
+        if greetingKeywords.contains(where: { lower.contains($0) }) {
+            return false
+        }
+        
+        if trimmed.count <= 6 {
+            return true
+        }
+        
+        let questionKeywords: [String]
+        switch language {
+        case .chinese:
+            questionKeywords = ["什麼是", "是什么", "是什麼", "是啥", "是誰", "是谁", "請介紹", "介紹一下", "解釋", "說明", "為什麼"]
+        case .english:
+            questionKeywords = ["what is", "what's", "who is", "tell me about", "explain", "define", "why"]
+        case .japanese:
+            questionKeywords = ["とは", "って何", "何ですか", "教えて", "説明して", "なぜ"]
+        }
+        return questionKeywords.contains(where: { lower.contains($0) })
+    }
+    
+    private func normalizeWikiQuery(_ message: String, language: AppLanguage) -> String {
+        var query = message.trimmingCharacters(in: .whitespacesAndNewlines)
+        query = query.trimmingCharacters(in: CharacterSet(charactersIn: "？?!。,.、"))
+        let lower = query.lowercased()
+        
+        switch language {
+        case .english:
+            let prefixes = ["what is ", "what's ", "who is ", "tell me about ", "explain ", "define "]
+            for prefix in prefixes where lower.hasPrefix(prefix) {
+                query = String(query.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+            let articles = ["a ", "an ", "the "]
+            for article in articles where query.lowercased().hasPrefix(article) {
+                query = String(query.dropFirst(article.count))
+                break
+            }
+        case .chinese:
+            let prefixes = ["什麼是", "是什么", "請介紹", "介紹一下", "解釋", "說明"]
+            for prefix in prefixes where query.hasPrefix(prefix) {
+                query = String(query.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+            let suffixes = ["是什麼", "是什么", "是啥", "是誰", "是谁"]
+            for suffix in suffixes where query.hasSuffix(suffix) {
+                query = String(query.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        case .japanese:
+            let prefixes = ["教えて", "説明して"]
+            for prefix in prefixes where query.hasPrefix(prefix) {
+                query = String(query.dropFirst(prefix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+            let suffixes = ["とは", "って何", "何ですか"]
+            for suffix in suffixes where query.hasSuffix(suffix) {
+                query = String(query.dropLast(suffix.count)).trimmingCharacters(in: .whitespacesAndNewlines)
+                break
+            }
+        }
+        
+        return query
+    }
+    
+    private func isValidWikiSummary(_ summary: String, language: AppLanguage) -> Bool {
+        if summary.isEmpty { return false }
+        let lower = summary.lowercased()
+        if lower.contains("network error") || lower.contains("query error") {
+            return false
+        }
+        switch language {
+        case .chinese:
+            return !summary.contains("找不到資料")
+        case .english:
+            return !summary.contains("No information found.")
+        case .japanese:
+            return !summary.contains("情報が見つかりませんでした")
+        }
+    }
+    
+    private func wikiContextPrefix(language: AppLanguage) -> String {
+        switch language {
+        case .chinese:
+            return "參考資料（維基百科摘要）："
+        case .english:
+            return "Reference (Wikipedia summary): "
+        case .japanese:
+            return "参考情報（ウィキペディア要約）："
+        }
     }
     
     // MARK: - 5. 連線檢查 (前端修正版)
@@ -245,6 +408,7 @@ class OpenAIService {
         do {
             print("📡 正在連線: \(url.absoluteString)...")
             let (_, response) = try await URLSession.shared.data(for: request)
+            SubscriptionManager.shared.updateServerTime(from: response)
             if let httpResponse = response as? HTTPURLResponse {
                 // 只要有回應 (200或404) 都算活著
                 if httpResponse.statusCode == 200 || httpResponse.statusCode == 404 {

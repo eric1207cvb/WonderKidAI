@@ -1,4 +1,5 @@
 import SwiftUI
+import Foundation
 
 // 🇯🇵 日文振假名專用組件 - 讓平假名顯示在漢字正上方
 struct FuriganaText: View {
@@ -16,36 +17,19 @@ struct FuriganaText: View {
     
     var body: some View {
         // 解析文字中的振假名格式：漢字(ひらがな)
-        let segments = parseFurigana(text)
+        let normalizedText = normalizeRubyMarkup(text)
+        let segments = parseFurigana(normalizedText)
         
         // 使用 HStack + VStack 組合來排列
         FlowLayout(spacing: 2) {
-            ForEach(Array(segments.enumerated()), id: \.offset) { index, segment in
-                if let furigana = segment.furigana, !furigana.isEmpty {
-                    // 有振假名的字：垂直排列
-                    VStack(spacing: 0) {
-                        Text(furigana)
-                            .font(.system(size: fontSize * 0.5, weight: .regular))
-                            .foregroundColor(textColor.opacity(0.8))
-                            .frame(minWidth: fontSize * CGFloat(segment.base.count))
-                        
-                        Text(segment.base)
-                            .font(.system(size: fontSize, weight: fontWeight, design: .rounded))
-                            .foregroundColor(textColor)
-                    }
-                } else {
-                    // 沒有振假名的字：只顯示基礎文字
-                    // 為了對齊，上方留空
-                    VStack(spacing: 0) {
-                        Text(" ")
-                            .font(.system(size: fontSize * 0.5))
-                            .opacity(0)
-                        
-                        Text(segment.base)
-                            .font(.system(size: fontSize, weight: fontWeight, design: .rounded))
-                            .foregroundColor(textColor)
-                    }
-                }
+            ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
+                FuriganaSegmentView(
+                    base: segment.base,
+                    furigana: segment.furigana,
+                    fontSize: fontSize,
+                    fontWeight: fontWeight,
+                    textColor: textColor
+                )
             }
         }
     }
@@ -118,12 +102,79 @@ struct FuriganaText: View {
         
         return segments
     }
+
+    private func normalizeRubyMarkup(_ text: String) -> String {
+        let pattern = "<ruby>(.*?)<rt>(.*?)</rt></ruby>"
+        guard let regex = try? NSRegularExpression(
+            pattern: pattern,
+            options: [.dotMatchesLineSeparators, .caseInsensitive]
+        ) else {
+            return text
+        }
+        
+        let range = NSRange(text.startIndex..., in: text)
+        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1($2)")
+    }
 }
 
 // 振假名片段
 struct FuriganaSegment {
     let base: String
     let furigana: String?
+}
+
+private struct FuriganaSegmentView: View {
+    let base: String
+    let furigana: String?
+    let fontSize: CGFloat
+    let fontWeight: Font.Weight
+    let textColor: Color
+    
+    @State private var baseSize: CGSize = .zero
+    
+    var body: some View {
+        VStack(spacing: 0) {
+            if let furigana = furigana, !furigana.isEmpty {
+                Text(furigana)
+                    .font(.system(size: fontSize * 0.5, weight: .regular))
+                    .foregroundColor(textColor.opacity(0.8))
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+                    .frame(width: max(baseSize.width, 1), alignment: .center)
+            } else {
+                Text(" ")
+                    .font(.system(size: fontSize * 0.5, weight: .regular))
+                    .opacity(0)
+                    .frame(width: max(baseSize.width, 1), alignment: .center)
+            }
+            
+            Text(base)
+                .font(.system(size: fontSize, weight: fontWeight, design: .rounded))
+                .foregroundColor(textColor)
+                .background(FuriganaSizeReader())
+        }
+        .onPreferenceChange(FuriganaSizeKey.self) { size in
+            if size != baseSize {
+                baseSize = size
+            }
+        }
+    }
+}
+
+private struct FuriganaSizeReader: View {
+    var body: some View {
+        GeometryReader { geo in
+            Color.clear.preference(key: FuriganaSizeKey.self, value: geo.size)
+        }
+    }
+}
+
+private struct FuriganaSizeKey: PreferenceKey {
+    static var defaultValue: CGSize = .zero
+    
+    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
+        value = nextValue()
+    }
 }
 
 // 自動換行的佈局（類似 FlowLayout）

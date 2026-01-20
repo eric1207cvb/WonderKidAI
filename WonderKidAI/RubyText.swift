@@ -66,7 +66,7 @@ public struct RubyText: View {
         var index = text.startIndex
         
         while index < text.endIndex {
-            var baseStart = index
+            let baseStart = index
             var baseEnd = index
             var foundRuby = false
             

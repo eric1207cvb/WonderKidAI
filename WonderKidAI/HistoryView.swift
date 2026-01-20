@@ -22,7 +22,7 @@ struct HistoryView: View {
                             .font(.system(size: 60))
                             .foregroundColor(.secondary) // 自動變灰色
                         
-                        Text(language == .chinese ? "還沒有紀錄喔\n快去問問安安老師吧！" : "No records yet.\nGo ask Teacher An-An!")
+                        Text(emptyStateText)
                             .multilineTextAlignment(.center)
                             .foregroundColor(.secondary) // 自動變灰色
                             .font(.system(.body, design: .rounded))
@@ -71,10 +71,20 @@ struct HistoryView: View {
                                         .font(.headline)
                                         .foregroundColor(.MagicBlue)
                                     
-                                    Text(item.answer)
-                                        .font(.subheadline)
-                                        .foregroundColor(.secondary) // 🔥 關鍵：次要文字自動變灰
+                                    if item.language == "ja-JP" {
+                                        FuriganaText(
+                                            item.answer,
+                                            fontSize: 14,
+                                            fontWeight: .regular,
+                                            textColor: .secondary
+                                        )
                                         .lineLimit(3) // 預覽只顯示 3 行
+                                    } else {
+                                        Text(item.answer)
+                                            .font(.subheadline)
+                                            .foregroundColor(.secondary) // 🔥 關鍵：次要文字自動變灰
+                                            .lineLimit(3) // 預覽只顯示 3 行
+                                    }
                                 }
                             }
                             .padding(.vertical, 8)
@@ -87,7 +97,7 @@ struct HistoryView: View {
                     .listStyle(.insetGrouped) // 使用群組樣式，質感較好
                 }
             }
-            .navigationTitle(language == .chinese ? "👶 成長足跡" : "👶 Growth Journey")
+            .navigationTitle(historyTitle)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 // 右上角關閉按鈕
@@ -102,7 +112,7 @@ struct HistoryView: View {
                 // 左上角清空按鈕
                 ToolbarItem(placement: .navigationBarLeading) {
                     if !manager.history.isEmpty {
-                        Button(language == .chinese ? "清空" : "Clear") {
+                        Button(clearButtonTitle) {
                             manager.clearHistory()
                         }
                         .foregroundColor(.red)
@@ -112,5 +122,38 @@ struct HistoryView: View {
             }
         }
         .navigationViewStyle(.stack) // 確保 iPad 顯示正常
+    }
+
+    private var historyTitle: String {
+        switch language {
+        case .chinese:
+            return "👶 成長足跡"
+        case .english:
+            return "👶 Growth Journey"
+        case .japanese:
+            return "👶 成長記録"
+        }
+    }
+
+    private var emptyStateText: String {
+        switch language {
+        case .chinese:
+            return "還沒有紀錄喔\n快去問問安安老師吧！"
+        case .english:
+            return "No records yet.\nGo ask Teacher An-An!"
+        case .japanese:
+            return "まだ記録がないよ\nあんあん先生に聞いてみよう！"
+        }
+    }
+
+    private var clearButtonTitle: String {
+        switch language {
+        case .chinese:
+            return "清空"
+        case .english:
+            return "Clear"
+        case .japanese:
+            return "削除"
+        }
     }
 }

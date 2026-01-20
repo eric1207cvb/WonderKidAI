@@ -1,11 +1,15 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
-<dict>
-	<key>NSAppTransportSecurity</key>
 	<dict>
-		<key>NSAllowsArbitraryLoads</key>
-		<false/>
-	</dict>
+		<key>NSMicrophoneUsageDescription</key>
+		<string>需要使用麥克風來錄音提問。</string>
+		<key>NSSpeechRecognitionUsageDescription</key>
+		<string>需要使用語音辨識來理解孩子的問題。</string>
+		<key>NSAppTransportSecurity</key>
+		<dict>
+			<key>NSAllowsArbitraryLoads</key>
+			<false/>
+		</dict>
 </dict>
 </plist>
