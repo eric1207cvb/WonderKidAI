@@ -485,7 +485,7 @@ struct ContentView: View {
                                     
                                     Text(lastQuestion)
                                         .font(.body)
-                                        .foregroundColor(.primary)
+                                        .foregroundColor(.DarkText)
                                 }
                                 .padding(.horizontal)
                                 .padding(.top, 10)
@@ -689,11 +689,15 @@ struct ContentView: View {
                     }
                 }
             HStack(spacing: 20) {
-                Link("Privacy Policy", destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")!)
-                    .font(.caption)
+                Button("Privacy Policy") {
+                    showPrivacy = true
+                }
+                .font(.caption)
                 Text("|")
-                Link("Terms of Use (EULA)", destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!)
-                    .font(.caption)
+                Button("Terms of Use (EULA)") {
+                    showEULA = true
+                }
+                .font(.caption)
             }
             .padding()
             .foregroundColor(.gray)

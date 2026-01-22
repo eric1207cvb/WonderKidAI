@@ -4,6 +4,9 @@ struct LegalView: View {
     let type: LegalType
     let language: AppLanguage
     @Binding var isPresented: Bool
+    @Environment(\.openURL) private var openURL
+    @State private var showParentalGate: Bool = false
+    @State private var pendingURL: URL?
     
     enum LegalType {
         case privacy
@@ -12,63 +15,80 @@ struct LegalView: View {
     
     var body: some View {
         NavigationView {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    
-                    // 1. 主要條款內容
-                    Text(getContent())
-                        .font(.system(size: 14))
-                        .foregroundColor(.primary)
-                        .lineSpacing(4)
-                    
-                    // 2. 分隔線
-                    Divider()
-                        .padding(.vertical, 10)
-                    
-                    // 3. 🔥 新增：外部超連結按鈕 (EULA 專用)
-                    if type == .eula {
-                        Link(destination: URL(string: "https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")!) {
-                            HStack {
-                                Image(systemName: "link.circle.fill")
-                                    .font(.system(size: 20))
-                                Text(language == .chinese ? "點此閱讀完整 Apple EULA 條款" : (language == .japanese ? "Apple EULA全文を読む" : "Read Full Apple EULA"))
-                                    .fontWeight(.bold)
-                                Spacer()
-                                Image(systemName: "arrow.up.right.square")
-                                    .font(.caption)
+            ZStack {
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 20) {
+                        
+                        // 1. 主要條款內容
+                        Text(getContent())
+                            .font(.system(size: 14))
+                            .foregroundColor(.primary)
+                            .lineSpacing(4)
+                        
+                        // 2. 分隔線
+                        Divider()
+                            .padding(.vertical, 10)
+                        
+                        // 3. 🔥 新增：外部超連結按鈕 (EULA 專用)
+                        if type == .eula {
+                            Button(action: {
+                                openExternalURL("https://www.apple.com/legal/internet-services/itunes/dev/stdeula/")
+                            }) {
+                                HStack {
+                                    Image(systemName: "link.circle.fill")
+                                        .font(.system(size: 20))
+                                    Text(language == .chinese ? "點此閱讀完整 Apple EULA 條款" : (language == .japanese ? "Apple EULA全文を読む" : "Read Full Apple EULA"))
+                                        .fontWeight(.bold)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right.square")
+                                        .font(.caption)
+                                }
+                                .padding()
+                                .foregroundColor(.white)
+                                .background(Color.MagicBlue) // 使用你的主題色
+                                .cornerRadius(12)
+                                .shadow(radius: 2)
                             }
-                            .padding()
-                            .foregroundColor(.white)
-                            .background(Color.MagicBlue) // 使用你的主題色
-                            .cornerRadius(12)
-                            .shadow(radius: 2)
-                        }
-                    } else if type == .privacy {
-                        // 隱私權政策的外部連結 (連回你的 GitHub 隱私頁面)
-                        Link(destination: URL(string: "https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")!) {
-                            HStack {
-                                Image(systemName: "hand.raised.fill")
-                                    .font(.system(size: 20))
-                                Text(language == .chinese ? "線上查看完整隱私權政策" : (language == .japanese ? "オンラインで全文を読む" : "View Privacy Policy Online"))
-                                    .fontWeight(.bold)
-                                Spacer()
-                                Image(systemName: "arrow.up.right.square")
-                                    .font(.caption)
+                        } else if type == .privacy {
+                            // 隱私權政策的外部連結 (連回你的 GitHub 隱私頁面)
+                            Button(action: {
+                                openExternalURL("https://github.com/eric1207cvb/WonderKidAI/blob/main/PRIVACY.md")
+                            }) {
+                                HStack {
+                                    Image(systemName: "hand.raised.fill")
+                                        .font(.system(size: 20))
+                                    Text(language == .chinese ? "線上查看完整隱私權政策" : (language == .japanese ? "オンラインで全文を読む" : "View Privacy Policy Online"))
+                                        .fontWeight(.bold)
+                                    Spacer()
+                                    Image(systemName: "arrow.up.right.square")
+                                        .font(.caption)
+                                }
+                                .padding()
+                                .foregroundColor(.MagicBlue)
+                                .background(Color.white)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12)
+                                        .stroke(Color.MagicBlue, lineWidth: 1)
+                                )
                             }
-                            .padding()
-                            .foregroundColor(.MagicBlue)
-                            .background(Color.white)
-                            .overlay(
-                                RoundedRectangle(cornerRadius: 12)
-                                    .stroke(Color.MagicBlue, lineWidth: 1)
-                            )
                         }
+                        
+                        // 底部留白，避免被 Home Bar 擋住
+                        Spacer(minLength: 40)
                     }
-                    
-                    // 底部留白，避免被 Home Bar 擋住
-                    Spacer(minLength: 40)
+                    .padding()
                 }
-                .padding()
+                
+                if showParentalGate {
+                    ParentalGateView(isPresented: $showParentalGate, language: language) {
+                        if let url = pendingURL {
+                            openURL(url)
+                        }
+                        pendingURL = nil
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                    .zIndex(1)
+                }
             }
             .navigationTitle(getTitle())
             .navigationBarTitleDisplayMode(.inline)
@@ -83,6 +103,12 @@ struct LegalView: View {
             }
         }
         .navigationViewStyle(.stack) // 確保 iPad 相容性
+    }
+
+    private func openExternalURL(_ urlString: String) {
+        guard let url = URL(string: urlString) else { return }
+        pendingURL = url
+        showParentalGate = true
     }
     
     func getTitle() -> String {
