@@ -77,7 +77,9 @@ class SpeechService: NSObject {
                 try session.setCategory(.playAndRecord, mode: .default, options: [.defaultToSpeaker, .allowBluetoothHFP])
             } else {
                 // 播放模式：專注於播放
-                try session.setCategory(.playback, mode: .default)
+                try session.setCategory(.playback, mode: .spokenAudio)
+                try? session.setPreferredSampleRate(48_000)
+                try? session.setPreferredIOBufferDuration(0.02)
             }
             try session.setActive(true, options: .notifyOthersOnDeactivation)
         } catch {

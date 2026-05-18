@@ -7,21 +7,26 @@ struct FuriganaText: View {
     let fontSize: CGFloat
     let fontWeight: Font.Weight
     let textColor: Color
+    let lineSpacing: CGFloat
     
-    init(_ text: String, fontSize: CGFloat = 18, fontWeight: Font.Weight = .regular, textColor: Color = .primary) {
+    init(
+        _ text: String,
+        fontSize: CGFloat = 18,
+        fontWeight: Font.Weight = .regular,
+        textColor: Color = .primary,
+        lineSpacing: CGFloat = 10
+    ) {
         self.text = text
         self.fontSize = fontSize
         self.fontWeight = fontWeight
         self.textColor = textColor
+        self.lineSpacing = lineSpacing
     }
     
     var body: some View {
-        // 解析文字中的振假名格式：漢字(ひらがな)
-        let normalizedText = normalizeRubyMarkup(text)
-        let segments = parseFurigana(normalizedText)
+        let segments = parseSegments(text)
         
-        // 使用 HStack + VStack 組合來排列
-        FlowLayout(spacing: 2) {
+        FlowLayout(spacing: max(2, fontSize * 0.12), lineSpacing: lineSpacing) {
             ForEach(Array(segments.enumerated()), id: \.offset) { _, segment in
                 FuriganaSegmentView(
                     base: segment.base,
@@ -34,68 +39,24 @@ struct FuriganaText: View {
         }
     }
     
-    // 解析振假名格式
-    private func parseFurigana(_ text: String) -> [FuriganaSegment] {
+    private func parseSegments(_ text: String) -> [FuriganaSegment] {
         var segments: [FuriganaSegment] = []
         var currentIndex = text.startIndex
         
         while currentIndex < text.endIndex {
-            // 查找下一個 '(' 符號
-            if let openParenIndex = text[currentIndex...].firstIndex(of: "(") {
-                // 如果前面有文字，先加入沒有振假名的部分
-                if currentIndex < openParenIndex {
-                    let plainText = String(text[currentIndex..<openParenIndex])
-                    // 把每個字符單獨處理（保持對齊）
-                    for char in plainText {
-                        segments.append(FuriganaSegment(base: String(char), furigana: nil))
-                    }
-                }
-                
-                // 查找對應的 ')' 符號
-                if let closeParenIndex = text[openParenIndex...].firstIndex(of: ")") {
-                    // 提取振假名
-                    let furiganaStartIndex = text.index(after: openParenIndex)
-                    let furigana = String(text[furiganaStartIndex..<closeParenIndex])
-                    
-                    // 提取基礎文字（在 '(' 之前的字符）
-                    if openParenIndex > text.startIndex {
-                        let baseEndIndex = openParenIndex
-                        var baseStartIndex = baseEndIndex
-                        
-                        // 往前找到第一個非 CJK 字符或開頭
-                        while baseStartIndex > currentIndex {
-                            let prevIndex = text.index(before: baseStartIndex)
-                            let char = text[prevIndex]
-                            if let scalar = char.unicodeScalars.first,
-                               (0x4E00...0x9FFF).contains(scalar.value) {
-                                baseStartIndex = prevIndex
-                            } else {
-                                break
-                            }
-                        }
-                        
-                        // 移除最後加入的那些字符（因為它們有振假名）
-                        let baseLength = text.distance(from: baseStartIndex, to: baseEndIndex)
-                        if baseLength > 0 && segments.count >= baseLength {
-                            segments.removeLast(baseLength)
-                        }
-                        
-                        let base = String(text[baseStartIndex..<baseEndIndex])
-                        segments.append(FuriganaSegment(base: base, furigana: furigana))
-                    }
-                    
-                    currentIndex = text.index(after: closeParenIndex)
-                } else {
-                    // 沒有對應的 ')'，視為普通文字
-                    segments.append(FuriganaSegment(base: String(text[currentIndex]), furigana: nil))
-                    currentIndex = text.index(after: currentIndex)
-                }
+            if let rubySegment = parseRubySegment(in: text, from: currentIndex) {
+                segments.append(rubySegment.segment)
+                currentIndex = rubySegment.nextIndex
+                continue
+            }
+
+            if let nextRubyRange = text.range(of: "<ruby>", options: [.caseInsensitive], range: currentIndex..<text.endIndex) {
+                let chunk = String(text[currentIndex..<nextRubyRange.lowerBound])
+                segments.append(contentsOf: parseParentheticalSegments(chunk))
+                currentIndex = nextRubyRange.lowerBound
             } else {
-                // 沒有更多振假名，剩餘全部視為普通文字
-                let remainingText = String(text[currentIndex...])
-                for char in remainingText {
-                    segments.append(FuriganaSegment(base: String(char), furigana: nil))
-                }
+                let chunk = String(text[currentIndex..<text.endIndex])
+                segments.append(contentsOf: parseParentheticalSegments(chunk))
                 break
             }
         }
@@ -103,17 +64,174 @@ struct FuriganaText: View {
         return segments
     }
 
-    private func normalizeRubyMarkup(_ text: String) -> String {
-        let pattern = "<ruby>(.*?)<rt>(.*?)</rt></ruby>"
-        guard let regex = try? NSRegularExpression(
-            pattern: pattern,
-            options: [.dotMatchesLineSeparators, .caseInsensitive]
+    private func parseRubySegment(
+        in text: String,
+        from index: String.Index
+    ) -> (segment: FuriganaSegment, nextIndex: String.Index)? {
+        guard let rubyOpen = text.range(
+            of: "<ruby>",
+            options: [.caseInsensitive, .anchored],
+            range: index..<text.endIndex
         ) else {
-            return text
+            return nil
         }
-        
-        let range = NSRange(text.startIndex..., in: text)
-        return regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1($2)")
+
+        guard let rtOpen = text.range(
+            of: "<rt>",
+            options: [.caseInsensitive],
+            range: rubyOpen.upperBound..<text.endIndex
+        ), let rtClose = text.range(
+            of: "</rt>",
+            options: [.caseInsensitive],
+            range: rtOpen.upperBound..<text.endIndex
+        ), let rubyClose = text.range(
+            of: "</ruby>",
+            options: [.caseInsensitive],
+            range: rtClose.upperBound..<text.endIndex
+        ) else {
+            return nil
+        }
+
+        let base = String(text[rubyOpen.upperBound..<rtOpen.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        let furigana = String(text[rtOpen.upperBound..<rtClose.lowerBound]).trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !base.isEmpty else { return nil }
+
+        let normalizedFurigana = furigana.replacingOccurrences(of: " ", with: "")
+        let segment = FuriganaSegment(
+            base: base,
+            furigana: normalizedFurigana.isEmpty || normalizedFurigana == base ? nil : normalizedFurigana
+        )
+        return (segment, rubyClose.upperBound)
+    }
+
+    private func parseParentheticalSegments(_ text: String) -> [FuriganaSegment] {
+        var segments: [FuriganaSegment] = []
+        var currentIndex = text.startIndex
+
+        while currentIndex < text.endIndex {
+            guard let openParenIndex = nextRubyParen(in: text, from: currentIndex) else {
+                appendPlainSegments(String(text[currentIndex...]), into: &segments)
+                break
+            }
+
+            if currentIndex < openParenIndex {
+                let plainText = String(text[currentIndex..<openParenIndex])
+                appendPlainSegments(plainText, into: &segments)
+            }
+
+            guard let closeParenIndex = closingRubyParen(in: text, for: openParenIndex) else {
+                appendPlainSegments(String(text[openParenIndex...]), into: &segments)
+                break
+            }
+
+            let furiganaStartIndex = text.index(after: openParenIndex)
+            let furigana = String(text[furiganaStartIndex..<closeParenIndex])
+                .replacingOccurrences(of: " ", with: "")
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+
+            let baseStartIndex = baseStartIndex(for: text, openParenIndex: openParenIndex)
+            let baseLength = text.distance(from: baseStartIndex, to: openParenIndex)
+
+            if baseLength > 0 && !furigana.isEmpty && segments.count >= baseLength {
+                segments.removeLast(baseLength)
+                let base = String(text[baseStartIndex..<openParenIndex])
+                segments.append(FuriganaSegment(base: base, furigana: furigana))
+                currentIndex = text.index(after: closeParenIndex)
+            } else {
+                appendPlainSegments(String(text[openParenIndex...closeParenIndex]), into: &segments)
+                currentIndex = text.index(after: closeParenIndex)
+            }
+        }
+
+        return segments
+    }
+
+    private func appendPlainSegments(_ text: String, into segments: inout [FuriganaSegment]) {
+        for char in text {
+            segments.append(FuriganaSegment(base: String(char), furigana: nil))
+        }
+    }
+
+    private func nextRubyParen(in text: String, from index: String.Index) -> String.Index? {
+        var searchIndex = index
+        while searchIndex < text.endIndex {
+            let char = text[searchIndex]
+            if char == "(" || char == "（" {
+                return searchIndex
+            }
+            searchIndex = text.index(after: searchIndex)
+        }
+        return nil
+    }
+
+    private func closingRubyParen(in text: String, for openParenIndex: String.Index) -> String.Index? {
+        let openChar = text[openParenIndex]
+        let targetCloseChar: Character = openChar == "（" ? "）" : ")"
+        var searchIndex = text.index(after: openParenIndex)
+        while searchIndex < text.endIndex {
+            if text[searchIndex] == targetCloseChar {
+                return searchIndex
+            }
+            searchIndex = text.index(after: searchIndex)
+        }
+        return nil
+    }
+
+    private func baseStartIndex(for text: String, openParenIndex: String.Index) -> String.Index {
+        guard openParenIndex > text.startIndex else { return openParenIndex }
+
+        var candidateStart = openParenIndex
+        var sawKanji = false
+
+        while candidateStart > text.startIndex {
+            let previousIndex = text.index(before: candidateStart)
+            let character = text[previousIndex]
+
+            guard isRubyBaseCharacter(character) else { break }
+            if isKanji(character) {
+                sawKanji = true
+            }
+            candidateStart = previousIndex
+        }
+
+        guard sawKanji else { return openParenIndex }
+
+        if !isKanji(text[candidateStart]) {
+            var adjustedStart = candidateStart
+            while adjustedStart < openParenIndex {
+                let currentChar = text[adjustedStart]
+                if isKanji(currentChar) {
+                    return adjustedStart
+                }
+
+                let nextIndex = text.index(after: adjustedStart)
+                if (currentChar == "お" || currentChar == "ご"),
+                   nextIndex < openParenIndex,
+                   isKanji(text[nextIndex]) {
+                    return adjustedStart
+                }
+                adjustedStart = nextIndex
+            }
+        }
+
+        return candidateStart
+    }
+
+    private func isRubyBaseCharacter(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first else { return false }
+        let value = scalar.value
+
+        let isKanjiRange = (0x3400...0x4DBF).contains(value) || (0x4E00...0x9FFF).contains(value)
+        let isKanaRange = (0x3040...0x309F).contains(value) || (0x30A0...0x30FF).contains(value)
+        let isJapaneseMark = "々〆ヵヶー".contains(character)
+
+        return isKanjiRange || isKanaRange || isJapaneseMark
+    }
+
+    private func isKanji(_ character: Character) -> Bool {
+        guard let scalar = character.unicodeScalars.first else { return false }
+        let value = scalar.value
+        return (0x3400...0x4DBF).contains(value) || (0x4E00...0x9FFF).contains(value) || character == "々"
     }
 }
 
@@ -130,64 +248,48 @@ private struct FuriganaSegmentView: View {
     let fontWeight: Font.Weight
     let textColor: Color
     
-    @State private var baseSize: CGSize = .zero
-    
     var body: some View {
+        let rubyFontSize = max(10, fontSize * 0.5)
+        let rubyHeight = rubyFontSize * 1.35
+        let trimmedFurigana = furigana?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let hasRuby = !trimmedFurigana.isEmpty
+
         VStack(spacing: 0) {
-            if let furigana = furigana, !furigana.isEmpty {
-                Text(furigana)
-                    .font(.system(size: fontSize * 0.5, weight: .regular))
-                    .foregroundColor(textColor.opacity(0.8))
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.7)
-                    .frame(width: max(baseSize.width, 1), alignment: .center)
-            } else {
-                Text(" ")
-                    .font(.system(size: fontSize * 0.5, weight: .regular))
-                    .opacity(0)
-                    .frame(width: max(baseSize.width, 1), alignment: .center)
-            }
+            Text(hasRuby ? trimmedFurigana : " ")
+                .font(.system(size: rubyFontSize, weight: .regular, design: .rounded))
+                .foregroundColor(textColor.opacity(0.82))
+                .lineLimit(1)
+                .minimumScaleFactor(0.65)
+                .fixedSize(horizontal: true, vertical: false)
+                .opacity(hasRuby ? 1 : 0)
+                .frame(height: rubyHeight, alignment: .center)
             
             Text(base)
                 .font(.system(size: fontSize, weight: fontWeight, design: .rounded))
                 .foregroundColor(textColor)
-                .background(FuriganaSizeReader())
+                .fixedSize(horizontal: true, vertical: false)
         }
-        .onPreferenceChange(FuriganaSizeKey.self) { size in
-            if size != baseSize {
-                baseSize = size
-            }
-        }
-    }
-}
-
-private struct FuriganaSizeReader: View {
-    var body: some View {
-        GeometryReader { geo in
-            Color.clear.preference(key: FuriganaSizeKey.self, value: geo.size)
-        }
-    }
-}
-
-private struct FuriganaSizeKey: PreferenceKey {
-    static var defaultValue: CGSize = .zero
-    
-    static func reduce(value: inout CGSize, nextValue: () -> CGSize) {
-        value = nextValue()
+        .frame(minWidth: max(fontSize * 1.05, CGFloat(base.count) * fontSize * 0.92), alignment: .center)
     }
 }
 
 // 自動換行的佈局（類似 FlowLayout）
 struct FlowLayout: Layout {
     var spacing: CGFloat = 4
+    var lineSpacing: CGFloat? = nil
     
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let result = FlowResult(in: proposal.replacingUnspecifiedDimensions().width, subviews: subviews, spacing: spacing)
+        let result = FlowResult(
+            in: proposal.replacingUnspecifiedDimensions().width,
+            subviews: subviews,
+            spacing: spacing,
+            lineSpacing: lineSpacing ?? spacing
+        )
         return result.size
     }
     
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing)
+        let result = FlowResult(in: bounds.width, subviews: subviews, spacing: spacing, lineSpacing: lineSpacing ?? spacing)
         for (index, subview) in subviews.enumerated() {
             subview.place(at: CGPoint(x: bounds.minX + result.positions[index].x, y: bounds.minY + result.positions[index].y), proposal: .unspecified)
         }
@@ -197,7 +299,7 @@ struct FlowLayout: Layout {
         var size: CGSize = .zero
         var positions: [CGPoint] = []
         
-        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat) {
+        init(in maxWidth: CGFloat, subviews: Subviews, spacing: CGFloat, lineSpacing: CGFloat) {
             var currentX: CGFloat = 0
             var currentY: CGFloat = 0
             var lineHeight: CGFloat = 0
@@ -208,7 +310,7 @@ struct FlowLayout: Layout {
                 if currentX + size.width > maxWidth && currentX > 0 {
                     // 換行
                     currentX = 0
-                    currentY += lineHeight + spacing
+                    currentY += lineHeight + lineSpacing
                     lineHeight = 0
                 }
                 

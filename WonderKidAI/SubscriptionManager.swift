@@ -13,6 +13,7 @@ class SubscriptionManager: NSObject, ObservableObject {
     @Published var customerInfo: CustomerInfo?
     @Published var isSubscriptionLoaded: Bool = false
     @Published var hasServerTime: Bool = false
+    @Published var freeQuotaRemaining: Int?
     
     // 設定你的 Entitlement ID (後台設定的權限名稱)
     private let proEntitlementID = "pro"
@@ -26,8 +27,10 @@ class SubscriptionManager: NSObject, ObservableObject {
     // 🔥 修改 2: 因為繼承了 NSObject，所以要 override init 並呼叫 super
     override private init() {
         super.init()
-        isPro = loadLastKnownPro()
+        // Token-consuming access must be based on freshly verified RevenueCat state.
+        isPro = false
         hasServerTime = loadServerTime() != nil
+        refreshFreeQuotaState()
         // 監聽 RevenueCat 的購買狀態變化
         Purchases.shared.delegate = self
     }
@@ -37,57 +40,119 @@ class SubscriptionManager: NSObject, ObservableObject {
         // 啟動時立刻檢查一次資格
         checkSubscriptionStatus()
     }
+
+    var dailyFreeLimitValue: Int {
+        dailyFreeLimit
+    }
+
+    var hasVerifiedProAccess: Bool {
+        isSubscriptionLoaded && isPro
+    }
     
     // MARK: - 檢查額度 (免費仔邏輯)
     func checkUserQuota() -> Bool {
-        if isPro { return true }
-        if !isSubscriptionLoaded { return false }
-        guard let dayToken = currentServerDayToken() else { return false }
-        
-        var snapshot = loadQuotaSnapshot()
-        if snapshot?.dayToken != dayToken {
-            let freshSnapshot = QuotaSnapshot(count: 0, dayToken: dayToken)
-            saveQuotaSnapshot(freshSnapshot)
-            snapshot = freshSnapshot
+        if !isSubscriptionLoaded {
+            refreshFreeQuotaState()
+            return false
         }
-        
-        let count = snapshot?.count ?? 0
-        print("📊 今日免費額度使用: \(count) / \(dailyFreeLimit)")
-        return count < dailyFreeLimit
+
+        if hasVerifiedProAccess {
+            refreshFreeQuotaState()
+            return true
+        }
+
+        guard let remaining = currentRemainingFreeQuota() else {
+            refreshFreeQuotaState()
+            return false
+        }
+
+        let used = dailyFreeLimit - remaining
+        print("📊 今日免費額度使用: \(used) / \(dailyFreeLimit)")
+        refreshFreeQuotaState()
+        return remaining > 0
     }
 
     func recordUsage() {
-        if isPro || !isSubscriptionLoaded { return }
-        guard let dayToken = currentServerDayToken() else { return }
-        
-        let snapshot = loadQuotaSnapshot()
-        let count = (snapshot?.dayToken == dayToken ? snapshot?.count ?? 0 : 0) + 1
-        saveQuotaSnapshot(QuotaSnapshot(count: count, dayToken: dayToken))
+        if !isSubscriptionLoaded || hasVerifiedProAccess {
+            refreshFreeQuotaState()
+            return
+        }
+        guard let dayToken = currentServerDayToken() else {
+            refreshFreeQuotaState()
+            return
+        }
+
+        let nextCount = min(quotaCount(for: dayToken) + 1, dailyFreeLimit)
+        saveQuotaSnapshot(QuotaSnapshot(count: nextCount, dayToken: dayToken))
+        refreshFreeQuotaState()
     }
     
     // MARK: - 檢查訂閱狀態
     func checkSubscriptionStatus() {
+        checkSubscriptionStatus(allowCacheRefreshRetry: true)
+    }
+
+    private func checkSubscriptionStatus(allowCacheRefreshRetry: Bool) {
         Purchases.shared.getCustomerInfo { [weak self] (info, error) in
             guard let self = self else { return }
             if let info = info {
+                if allowCacheRefreshRetry, self.needsVerifiedCustomerInfoRefresh(info) {
+                    Purchases.shared.invalidateCustomerInfoCache()
+                    self.checkSubscriptionStatus(allowCacheRefreshRetry: false)
+                    return
+                }
                 self.updateProStatus(with: info)
             } else {
                 DispatchQueue.main.async {
+                    self.isPro = false
                     self.isSubscriptionLoaded = true
+                    self.refreshFreeQuotaState()
+                    PremiumCloudSyncManager.shared.setPremiumSyncEnabled(false)
                 }
             }
         }
     }
+
+    private func needsVerifiedCustomerInfoRefresh(_ info: CustomerInfo) -> Bool {
+        info.entitlements[proEntitlementID]?.isActive == true
+            && !info.entitlements.verification.isVerified
+    }
     
     private func updateProStatus(with info: CustomerInfo) {
+        applyCustomerInfo(info)
+    }
+
+    @discardableResult
+    func applyCustomerInfo(_ info: CustomerInfo) -> Bool {
+        let hasVerifiedEntitlements = info.entitlements.verification.isVerified
+        let isActivePro = info.entitlements[proEntitlementID]?.isActive == true && hasVerifiedEntitlements
+
         DispatchQueue.main.async {
+            let wasVerifiedPro = self.hasVerifiedProAccess
             self.customerInfo = info
-            // 檢查是否擁有 "pro" 的權限
-            self.isPro = info.entitlements[self.proEntitlementID]?.isActive == true
+            // Token-consuming Pro access requires active entitlement and trusted RevenueCat verification.
+            self.isPro = isActivePro
             self.isSubscriptionLoaded = true
             self.saveLastKnownPro(self.isPro)
+            self.refreshFreeQuotaState()
+            PremiumCloudSyncManager.shared.setPremiumSyncEnabled(self.hasVerifiedProAccess)
+            self.handleSubscriptionDowngradeIfNeeded(wasVerifiedPro: wasVerifiedPro)
+            if !hasVerifiedEntitlements {
+                print("⚠️ RevenueCat entitlement verification failed or was not requested: \(info.entitlements.verification)")
+            }
             print("👑 VIP Status: \(self.isPro)")
         }
+
+        return isActivePro
+    }
+
+    private func handleSubscriptionDowngradeIfNeeded(wasVerifiedPro: Bool) {
+        guard wasVerifiedPro, !hasVerifiedProAccess else { return }
+
+        OpenAIService.shared.clearAllCachedAnswers()
+        OpenAIService.shared.clearAllCachedAudio()
+        PremiumCloudSyncManager.shared.setPremiumSyncEnabled(false)
+        print("🔒 Pro entitlement inactive. Cleared premium caches and reverted to free quota rules.")
     }
 
     func updateServerTime(from response: URLResponse) {
@@ -98,16 +163,51 @@ class SubscriptionManager: NSObject, ObservableObject {
     }
 
     private func updateServerTime(_ date: Date) {
-        if let stored = loadServerTime(), date <= stored { return }
+        if let stored = loadServerTime(), date <= stored {
+            refreshFreeQuotaState()
+            return
+        }
         saveServerTime(date)
         DispatchQueue.main.async {
             self.hasServerTime = true
+            self.refreshFreeQuotaState()
         }
     }
 
     private struct QuotaSnapshot: Codable {
         let count: Int
         let dayToken: String
+    }
+
+    private func currentRemainingFreeQuota() -> Int? {
+        guard let dayToken = currentServerDayToken() else { return nil }
+        let count = quotaCount(for: dayToken)
+        return max(dailyFreeLimit - count, 0)
+    }
+
+    private func quotaCount(for dayToken: String) -> Int {
+        var snapshot = loadQuotaSnapshot()
+        if snapshot?.dayToken != dayToken {
+            let freshSnapshot = QuotaSnapshot(count: 0, dayToken: dayToken)
+            saveQuotaSnapshot(freshSnapshot)
+            snapshot = freshSnapshot
+        }
+        return snapshot?.count ?? 0
+    }
+
+    private func refreshFreeQuotaState() {
+        let remaining: Int?
+        if hasVerifiedProAccess {
+            remaining = nil
+        } else if !isSubscriptionLoaded {
+            remaining = nil
+        } else {
+            remaining = currentRemainingFreeQuota()
+        }
+
+        DispatchQueue.main.async {
+            self.freeQuotaRemaining = remaining
+        }
     }
 
     private func currentServerDayToken() -> String? {

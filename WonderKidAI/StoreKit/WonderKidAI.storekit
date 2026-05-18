@@ -1,0 +1,128 @@
+{
+  "appPolicies" : {
+    "eula" : "",
+    "policies" : [
+      {
+        "locale" : "zh_TW",
+        "policyText" : "",
+        "policyURL" : ""
+      },
+      {
+        "locale" : "en_US",
+        "policyText" : "",
+        "policyURL" : ""
+      },
+      {
+        "locale" : "ja_JP",
+        "policyText" : "",
+        "policyURL" : ""
+      }
+    ]
+  },
+  "identifier" : "9B52F8AC",
+  "nonRenewingSubscriptions" : [
+
+  ],
+  "products" : [
+
+  ],
+  "settings" : {
+    "_askToBuyEnabled" : false,
+    "_billingGracePeriodEnabled" : false,
+    "_billingIssuesEnabled" : false,
+    "_disableDialogs" : false,
+    "_failTransactionsEnabled" : false,
+    "_locale" : "zh_TW",
+    "_renewalBillingIssuesEnabled" : false,
+    "_storefront" : "TWN",
+    "_storeKitErrors" : [
+
+    ],
+    "_timeRate" : 0
+  },
+  "subscriptionGroups" : [
+    {
+      "id" : "7B1E3D6F",
+      "localizations" : [
+
+      ],
+      "name" : "WonderKidAI PRO",
+      "subscriptions" : [
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "190.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "48D71A2C",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "解鎖更完整的 STEM 問答、三語語音學習與跨裝置同步。",
+              "displayName" : "WonderKidAI PRO 月訂閱",
+              "locale" : "zh_TW"
+            },
+            {
+              "description" : "Unlock richer STEM answers, trilingual voice learning, and device sync.",
+              "displayName" : "WonderKidAI PRO Monthly",
+              "locale" : "en_US"
+            },
+            {
+              "description" : "より詳しい STEM 回答、3言語の音声学習、端末間同期を利用できます。",
+              "displayName" : "WonderKidAI PRO 月額プラン",
+              "locale" : "ja_JP"
+            }
+          ],
+          "productID" : "tw.yian.WonderKidAI.monthly",
+          "recurringSubscriptionPeriod" : "P1M",
+          "referenceName" : "WonderKidAI PRO Monthly",
+          "subscriptionGroupID" : "7B1E3D6F",
+          "type" : "RecurringSubscription"
+        },
+        {
+          "adHocOffers" : [
+
+          ],
+          "codeOffers" : [
+
+          ],
+          "displayPrice" : "1900.00",
+          "familyShareable" : false,
+          "groupNumber" : 1,
+          "internalID" : "A6C39E10",
+          "introductoryOffer" : null,
+          "localizations" : [
+            {
+              "description" : "解鎖全年 WonderKidAI PRO，適合長期陪伴孩子學習。",
+              "displayName" : "WonderKidAI PRO 年訂閱",
+              "locale" : "zh_TW"
+            },
+            {
+              "description" : "Unlock one year of WonderKidAI PRO for long-term STEM learning.",
+              "displayName" : "WonderKidAI PRO Yearly",
+              "locale" : "en_US"
+            },
+            {
+              "description" : "1年分の WonderKidAI PRO を利用し、長期的な STEM 学習を支えます。",
+              "displayName" : "WonderKidAI PRO 年額プラン",
+              "locale" : "ja_JP"
+            }
+          ],
+          "productID" : "tw.yian.WonderKidAI.yearly",
+          "recurringSubscriptionPeriod" : "P1Y",
+          "referenceName" : "WonderKidAI PRO Yearly",
+          "subscriptionGroupID" : "7B1E3D6F",
+          "type" : "RecurringSubscription"
+        }
+      ]
+    }
+  ],
+  "version" : {
+    "major" : 4,
+    "minor" : 0
+  }
+}

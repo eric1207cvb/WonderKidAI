@@ -4,8 +4,106 @@ import RevenueCat
 import RevenueCatUI
 import NaturalLanguage
 
+enum AssistantWaitingStage: CaseIterable {
+    case craftingAnswer
+    case generatingVoice
+    case preparingPlayback
+
+    var progressFloor: Double {
+        switch self {
+        case .craftingAnswer:
+            return 0.08
+        case .generatingVoice:
+            return 0.58
+        case .preparingPlayback:
+            return 0.93
+        }
+    }
+
+    var progressCeiling: Double {
+        switch self {
+        case .craftingAnswer:
+            return 0.46
+        case .generatingVoice:
+            return 0.9
+        case .preparingPlayback:
+            return 0.98
+        }
+    }
+
+    var progressStepRange: ClosedRange<Double> {
+        switch self {
+        case .craftingAnswer:
+            return 0.012...0.028
+        case .generatingVoice:
+            return 0.008...0.02
+        case .preparingPlayback:
+            return 0.003...0.008
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .craftingAnswer:
+            return "book.fill"
+        case .generatingVoice:
+            return "waveform"
+        case .preparingPlayback:
+            return "speaker.wave.2.fill"
+        }
+    }
+
+    var accentColor: Color {
+        switch self {
+        case .craftingAnswer:
+            return .MagicBlue
+        case .generatingVoice:
+            return .ButtonOrange
+        case .preparingPlayback:
+            return .MagicBlue
+        }
+    }
+
+    var secondaryAccentColor: Color {
+        switch self {
+        case .craftingAnswer:
+            return .MagicBlue
+        case .generatingVoice:
+            return .ButtonRed
+        case .preparingPlayback:
+            return .ButtonOrange
+        }
+    }
+}
+
 // MARK: - 主畫面 ContentView
 struct ContentView: View {
+    private static let preferredLanguageKey = "WonderKidPreferredLanguage"
+
+    private static func resolvedInitialLanguage() -> AppLanguage {
+        if let savedRawValue = UserDefaults.standard.string(forKey: preferredLanguageKey),
+           let savedLanguage = AppLanguage(rawValue: savedRawValue) {
+            return savedLanguage
+        }
+
+        return languageMatchingSystem()
+    }
+
+    private static func hasStoredLanguagePreference() -> Bool {
+        UserDefaults.standard.object(forKey: preferredLanguageKey) != nil
+    }
+
+    private static func languageMatchingSystem() -> AppLanguage {
+        let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
+        if preferredLang.hasPrefix("zh") {
+            return .chinese
+        } else if preferredLang.hasPrefix("ja") {
+            return .japanese
+        } else {
+            return .english
+        }
+    }
+
     // MARK: - 系統環境變數
     @Environment(\.scenePhase) var scenePhase
     
@@ -28,21 +126,11 @@ struct ContentView: View {
     
     // 初始化語言設定
     init() {
-        let preferredLang = Locale.preferredLanguages.first ?? Locale.current.identifier
-        
-        // 🇯🇵 支援三語：中文、英文、日文
-        let detectedLanguage: AppLanguage
-        if preferredLang.hasPrefix("zh") {
-            detectedLanguage = .chinese
-        } else if preferredLang.hasPrefix("ja") {
-            detectedLanguage = .japanese
-        } else {
-            detectedLanguage = .english
-        }
+        let detectedLanguage = Self.resolvedInitialLanguage()
         
         _selectedLanguage = State(initialValue: detectedLanguage)
         _localizedText = State(initialValue: LocalizedStrings(language: detectedLanguage))
-        _aiResponse = State(initialValue: LocalizedStrings(language: detectedLanguage).welcomeMessage)
+        _aiResponse = State(initialValue: LocalizedStrings(language: detectedLanguage).introMessage)
     }
     
     // 記憶介紹狀態（每種語言獨立）
@@ -58,9 +146,14 @@ struct ContentView: View {
     @State private var isRecording: Bool = false
     @State private var isPreparingRecording: Bool = false
     @State private var isThinking: Bool = false
+    @State private var assistantWaitingStage: AssistantWaitingStage = .craftingAnswer
+    @State private var assistantWaitingProgress: Double = 0
+    @State private var assistantWaitingTask: Task<Void, Never>?
     @State private var isPlaying: Bool = false
     @State private var userSpokenText: String = ""
     @State private var lastQuestion: String = ""
+    @State private var lastTTSInput: String = ""
+    @State private var lastSpeechTicket: String?
     
     // 任務與頁面控制
     @State private var currentTask: Task<Void, Never>?
@@ -72,6 +165,7 @@ struct ContentView: View {
     // 播放與文字進度
     @State private var audioPlayer: AVAudioPlayer?
     @State private var textTimer: Timer?
+    @State private var idleTimerStateBeforePlayback: Bool?
     @State private var currentWordIndex: Int = 0
     @State private var currentSentenceIndex: Int = 0
     @State private var isUserScrolling: Bool = false
@@ -115,8 +209,9 @@ struct ContentView: View {
                     }
                 }
             
-            // 🔥 2. 判斷是否為 iPad
-            let isPad = UIDevice.current.userInterfaceIdiom == .pad
+            // iPad Split View 窄寬時改用 phone-sized UI，避免大型元件擠壓。
+            let isPadDevice = UIDevice.current.userInterfaceIdiom == .pad
+            let isPad = isPadDevice && min(geometry.size.width, geometry.size.height) >= 700
             
             // --- 背景層 (共用) ---
             ZStack {
@@ -139,12 +234,14 @@ struct ContentView: View {
             }
             
             Group {
-                if isLandscape {
-                    // 🟢 橫向模式 (iPhone & iPad)
+                if isLandscape || isPad {
+                    // 🟢 橫向模式，以及 iPad regular 寬度：改用雙欄，避免 iPad 直向堆疊過長。
                     HStack(spacing: 0) {
                         
-                        // 左側欄：視覺動畫 + 麥克風 (iPad佔40%, iPhone佔35%)
-                        let leftColumnRatio = isPad ? 0.4 : 0.35
+                        // 左側欄：視覺動畫 + 麥克風。iPad 直向給閱讀區更多寬度。
+                        let leftColumnRatio: CGFloat = isPad ? (geometry.size.width >= 1024 ? 0.38 : 0.34) : 0.35
+                        let splitOuterPadding: CGFloat = isPad ? 24 : 0
+                        let splitAvailableWidth = max(1, geometry.size.width - splitOuterPadding * 2)
                         
                         VStack {
                             Spacer()
@@ -165,32 +262,32 @@ struct ContentView: View {
                             
                             Spacer()
                         }
-                        .frame(width: geometry.size.width * leftColumnRatio)
+                        .frame(width: splitAvailableWidth * leftColumnRatio)
                         
                         // 右側欄：內容 + 功能列
-                        VStack(spacing: isPad ? 16 : 8) {
+                        VStack(spacing: isPad ? 18 : 8) {
                             // 頂部導覽列
-                            topNavigationBar(geometry: geometry)
-                                .padding(.top, isPad ? 20 : 10)
+                            topNavigationBar(geometry: geometry, isPad: isPad)
+                                .padding(.top, isPad ? 18 : 10)
                             
                             // 文字閱讀區
-                            conversationArea(geometry: geometry, isLandscape: true)
+                            conversationArea(geometry: geometry, isLandscape: true, isPad: isPad)
                             
                             // 底部法律條款 (iPhone 橫向緊湊模式)
-                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: !isPad)
+                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: !isPad, isPad: isPad)
                         }
-                        .frame(width: geometry.size.width * (1 - leftColumnRatio))
-                        .padding(.trailing, 20)
+                        .frame(width: splitAvailableWidth * (1 - leftColumnRatio))
                         
                     }
+                    .padding(.horizontal, isPad ? 24 : 0)
                     .transition(.asymmetric(
                         insertion: .move(edge: .trailing).combined(with: .opacity),
                         removal: .move(edge: .leading).combined(with: .opacity)
                     ))
                 } else {
-                    // 🔵 直向模式 (iPhone & iPad Portrait)
+                    // 🔵 直向模式 (iPhone & iPad Split View 窄寬)
                     VStack(spacing: 0) {
-                        topNavigationBar(geometry: geometry)
+                        topNavigationBar(geometry: geometry, isPad: isPad)
                             .padding(.top, 10)
                         
                         Spacer(minLength: 10)
@@ -200,16 +297,16 @@ struct ContentView: View {
                         
                         Spacer(minLength: 10)
                         
-                        VStack(spacing: 20) {
-                            conversationArea(geometry: geometry, isLandscape: false)
+                        VStack(spacing: isPad ? 24 : 20) {
+                            conversationArea(geometry: geometry, isLandscape: false, isPad: isPad)
                             
                             controlsArea(isLandscape: false, isPad: isPad)
                             
                             Text(hintText)
-                                .font(.system(size: 14, weight: .bold, design: .rounded))
+                                .font(.system(size: isPad ? 18 : 14, weight: .bold, design: .rounded))
                                 .foregroundColor(.gray.opacity(0.9))
                             
-                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: false)
+                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: false, isPad: isPad)
                         }
                         .padding(.bottom, 10)
                     }
@@ -274,25 +371,46 @@ struct ContentView: View {
         .sheet(isPresented: $showHistory) {
             HistoryView(isPresented: $showHistory, language: selectedLanguage)
                 .navigationViewStyle(.stack)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPrivacy) {
             LegalView(type: .privacy, language: selectedLanguage, isPresented: $showPrivacy)
                 .navigationViewStyle(.stack)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showEULA) {
             LegalView(type: .eula, language: selectedLanguage, isPresented: $showEULA)
                 .navigationViewStyle(.stack)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $showPaywall) {
             paywallContent()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
+                endPlaybackIdleTimerProtection()
                 // 退出程式時重置所有介紹狀態
                 hasPlayedChineseIntro = false
                 hasPlayedEnglishIntro = false
                 hasPlayedJapaneseIntro = false
+                OpenAIService.shared.clearTransientAudioMemoryCache()
+                OpenAIService.shared.maintainLocalCaches()
+            } else if newPhase == .active {
+                syncLanguageWithSystemIfNeeded()
+                PremiumCloudSyncManager.shared.synchronizeNow()
             }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .premiumCloudLanguageDidChange)) { notification in
+            guard let rawValue = notification.userInfo?["language"] as? String,
+                  let cloudLanguage = AppLanguage(rawValue: rawValue),
+                  cloudLanguage != selectedLanguage else { return }
+
+            applyLanguage(cloudLanguage, shouldPersist: true, shouldSync: false)
         }
         .onAppear {
             SpeechService.shared.requestAuthorization()
@@ -309,25 +427,32 @@ struct ContentView: View {
                 didPrewarm = true
             }
         }
+        .onDisappear {
+            endPlaybackIdleTimerProtection()
+        }
     }
     
     // MARK: - UI 組件拆分 (ViewBuilders)
     
     @ViewBuilder
-    func topNavigationBar(geometry: GeometryProxy) -> some View {
-        VStack(spacing: 12) {
+    func topNavigationBar(geometry: GeometryProxy, isPad: Bool) -> some View {
+        let labelFontSize: CGFloat = isPad ? 14 : 12
+        let iconSize: CGFloat = isPad ? 18 : 16
+        let capsulePadding: CGFloat = isPad ? 12 : 10
+
+        VStack(spacing: isPad ? 14 : 12) {
             ZStack {
                 HStack {
                     Button(action: { showHistory = true }) {
                         HStack(spacing: 4) {
                             Image(systemName: "clock.arrow.circlepath")
-                                .font(.system(size: 16, weight: .semibold))
+                                .font(.system(size: iconSize, weight: .semibold))
                             if geometry.size.width > 380 {
                                 Text(localizedText.historyButton)
-                                    .font(.system(size: 12, weight: .bold))
+                                    .font(.system(size: labelFontSize, weight: .bold))
                             }
                         }
-                        .padding(10)
+                        .padding(capsulePadding)
                         .background(Color.white.opacity(0.9))
                         .foregroundColor(.MagicBlue)
                         .clipShape(Capsule())
@@ -352,29 +477,29 @@ struct ContentView: View {
                 HStack {
                     Spacer()
                     Button(action: {
-                        if !subManager.isPro {
-                            showParentalGate = true
+                        if !subManager.hasVerifiedProAccess {
+                            showPaywall = true
                         }
                     }) {
                         HStack(spacing: 4) {
-                            Image(systemName: subManager.isPro ? "crown.fill" : "crown")
-                                .font(.system(size: 16))
-                                .foregroundColor(subManager.isPro ? .yellow : .gray)
+                            Image(systemName: subManager.hasVerifiedProAccess ? "crown.fill" : "crown")
+                                .font(.system(size: iconSize))
+                                .foregroundColor(subManager.hasVerifiedProAccess ? .yellow : .gray)
                             if geometry.size.width > 380 {
-                                Text(subManager.isPro ? "VIP" : "PRO")
-                                    .font(.system(size: 12, weight: .bold))
-                                    .foregroundColor(subManager.isPro ? .ButtonOrange : .gray)
+                                Text(subManager.hasVerifiedProAccess ? "VIP" : "PRO")
+                                    .font(.system(size: labelFontSize, weight: .bold))
+                                    .foregroundColor(subManager.hasVerifiedProAccess ? .ButtonOrange : .gray)
                             }
                         }
-                        .padding(.vertical, 8)
-                        .padding(.horizontal, 12)
+                        .padding(.vertical, isPad ? 10 : 8)
+                        .padding(.horizontal, isPad ? 14 : 12)
                         .background(Color.white.opacity(0.9))
                         .clipShape(Capsule())
                         .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
                     }
                 }
             }
-            .padding(.horizontal, 20)
+            .padding(.horizontal, isPad ? 28 : 20)
             
             Button(action: {
                 let generator = UIImpactFeedbackGenerator(style: .light)
@@ -384,16 +509,56 @@ struct ContentView: View {
             }) {
                 HStack(spacing: 6) {
                     Image(systemName: isServerConnected == true ? "person.wave.2.fill" : (isServerConnected == false ? "moon.zzz.fill" : "antenna.radiowaves.left.and.right"))
-                        .font(.system(size: 12))
+                        .font(.system(size: isPad ? 14 : 12))
                         .foregroundColor(isServerConnected == true ? .green : (isServerConnected == false ? .gray : .orange))
                     Text(statusText)
-                        .font(.system(size: 12, weight: .bold, design: .rounded))
+                        .font(.system(size: isPad ? 13 : 12, weight: .bold, design: .rounded))
                         .foregroundColor(isServerConnected == true ? .DarkText : .gray)
+
+                    if !subManager.hasVerifiedProAccess {
+                        Rectangle()
+                            .fill(Color.MagicBlue.opacity(0.22))
+                            .frame(width: 1, height: isPad ? 14 : 12)
+
+                        freeQuotaInlineLabel(isPad: isPad)
+                    }
                 }
-                .padding(.vertical, 6)
-                .padding(.horizontal, 12)
+                .padding(.vertical, isPad ? 8 : 6)
+                .padding(.horizontal, isPad ? 14 : 12)
                 .background(Color.white.opacity(0.6))
                 .clipShape(Capsule())
+            }
+        }
+        .frame(maxWidth: isPad ? 760 : .infinity)
+    }
+
+    @ViewBuilder
+    func freeQuotaInlineLabel(isPad: Bool) -> some View {
+        let remaining = subManager.freeQuotaRemaining
+        let accentColor: Color = {
+            guard let remaining else { return .MagicBlue }
+            if remaining <= 0 {
+                return .ButtonRed
+            } else if remaining == 1 {
+                return .ButtonOrange
+            } else {
+                return .MagicBlue
+            }
+        }()
+
+        HStack(spacing: 8) {
+            if let remaining {
+                Text(localizedText.freeQuotaRemainingText(remaining: remaining, total: subManager.dailyFreeLimitValue))
+                    .font(.system(size: isPad ? 12 : 11, weight: .heavy, design: .rounded))
+                    .foregroundColor(accentColor)
+            } else {
+                ProgressView()
+                    .progressViewStyle(CircularProgressViewStyle(tint: accentColor))
+                    .scaleEffect(0.55)
+
+                Text(localizedText.freeQuotaLoading)
+                    .font(.system(size: isPad ? 12 : 11, weight: .bold, design: .rounded))
+                    .foregroundColor(.gray)
             }
         }
     }
@@ -402,10 +567,17 @@ struct ContentView: View {
     func visualAnimationArea(geometry: GeometryProxy, isLandscape: Bool, isPad: Bool) -> some View {
         ZStack {
             let iPhoneLandscapeScale: CGFloat = (isLandscape && !isPad) ? 0.7 : 1.0
-            let baseScale: CGFloat = (isLandscape && isPad) ? 1.2 : 1.0
+            let isPadPortraitSplit = isPad && isLandscape && geometry.size.width < geometry.size.height
+            let baseScale: CGFloat = (isLandscape && isPad && !isPadPortraitSplit) ? 1.05 : 1.0
             let finalScale = baseScale * iPhoneLandscapeScale
             
-            let baseSize = min(geometry.size.width * 0.45, isLandscape ? geometry.size.height * 0.6 : 300)
+            let widthFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.24 : 0.30) : 0.45
+            let landscapeHeightFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.36 : 0.46) : 0.6
+            let portraitCap: CGFloat = isPad ? 380 : 300
+            let baseSize = min(
+                geometry.size.width * widthFactor,
+                isLandscape ? geometry.size.height * landscapeHeightFactor : portraitCap
+            )
             
             Circle()
                 .fill(Color.white.opacity(0.85))
@@ -432,26 +604,50 @@ struct ContentView: View {
                     return "globe.asia.australia.fill"
                 }
                 if isThinking {
-                    return "book.fill"
+                    return assistantWaitingStage.symbolName
                 }
                 if isRecording {
                     return "waveform.circle.fill"
                 }
                 return "book.closed.fill"
             }()
+
+            let statusColor: Color = {
+                if isRecording {
+                    return .ButtonRed
+                }
+                if isThinking {
+                    return .MagicBlue
+                }
+                return .MagicBlue
+            }()
             
             Image(systemName: statusIconName)
                 .resizable()
                 .scaledToFit()
                 .frame(width: baseSize * 0.5 * finalScale)
-                .foregroundColor(isRecording ? Color.ButtonRed : Color.MagicBlue)
+                .foregroundColor(statusColor)
                 .shadow(radius: 5)
         }
     }
     
     @ViewBuilder
-    func conversationArea(geometry: GeometryProxy, isLandscape: Bool) -> some View {
+    func conversationArea(geometry: GeometryProxy, isLandscape: Bool, isPad: Bool) -> some View {
         ScrollViewReader { proxy in
+            let conversationHeight: CGFloat = {
+                if isLandscape {
+                    return .infinity
+                }
+                if isPad {
+                    return min(max(geometry.size.height * 0.42, 360), 520)
+                }
+                return geometry.size.height * 0.33
+            }()
+            let cardMaxWidth: CGFloat? = isPad ? (isLandscape ? 860 : 780) : nil
+            let centeredWaitingMinHeight: CGFloat = isLandscape ? 0 : max(0, conversationHeight - (isPad ? 24 : 18))
+            let shouldCenterWaitingCard = isThinking && (assistantWaitingStage == .craftingAnswer || lastQuestion.isEmpty)
+            let isShowingIntroContent = (aiResponse == localizedText.introMessage || aiResponse == localizedText.welcomeMessage) && lastQuestion.isEmpty
+
             let scrollToUserText = {
                 DispatchQueue.main.async {
                     withAnimation(.easeInOut(duration: 0.2)) {
@@ -462,12 +658,22 @@ struct ContentView: View {
             ZStack(alignment: .bottom) {
                 ScrollView {
                     Color.clear.frame(height: 0).id("ScrollTop")
-                    if isThinking {
-                        ThinkingAnimationView(language: selectedLanguage)
-                            .frame(maxWidth: .infinity, minHeight: 120)
+                    if shouldCenterWaitingCard {
+                        VStack(spacing: 0) {
+                            Spacer(minLength: 0)
+                            ThinkingAnimationView(
+                                language: selectedLanguage,
+                                stage: assistantWaitingStage,
+                                progress: assistantWaitingProgress,
+                                isPad: isPad
+                            )
+                            .frame(maxWidth: .infinity)
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, minHeight: centeredWaitingMinHeight)
                     } else if isRecording || isPreparingRecording {
                         Text(userSpokenText)
-                            .font(.system(size: 28, weight: .bold, design: .rounded))
+                            .font(.system(size: isPad ? 34 : 28, weight: .bold, design: .rounded))
                             .foregroundColor(isPreparingRecording ? .gray : .ButtonRed)
                             .multilineTextAlignment(.center)
                             .lineSpacing(10)
@@ -476,16 +682,32 @@ struct ContentView: View {
                             .id("UserText")
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
-                            if !lastQuestion.isEmpty {
-                                HStack(spacing: 6) {
+                            if isThinking {
+                                ThinkingAnimationView(
+                                    language: selectedLanguage,
+                                    stage: assistantWaitingStage,
+                                    progress: assistantWaitingProgress,
+                                    isPad: isPad
+                                )
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .padding(.horizontal)
+                                .padding(.top, 4)
+                            }
+
+                            let visibleLastQuestion = PromptVisibilitySanitizer.visibleQuestion(
+                                from: lastQuestion,
+                                language: selectedLanguage.rawValue
+                            )
+                            if !visibleLastQuestion.isEmpty {
+                                HStack(alignment: .top, spacing: 6) {
                                     Text(localizedText.questionLabel)
-                                        .font(.caption)
-                                        .fontWeight(.bold)
+                                        .font(.system(size: isPad ? 15 : 12, weight: .bold, design: .rounded))
                                         .foregroundColor(.orange)
                                     
-                                    Text(lastQuestion)
-                                        .font(.body)
+                                    Text(visibleLastQuestion)
+                                        .font(.system(size: isPad ? 19 : 17, weight: .medium, design: .rounded))
                                         .foregroundColor(.DarkText)
+                                        .fixedSize(horizontal: false, vertical: true)
                                 }
                                 .padding(.horizontal)
                                 .padding(.top, 10)
@@ -493,12 +715,21 @@ struct ContentView: View {
                             }
                             
                             // 🔥 修改：呼叫新的獨立組件
-                            if selectedLanguage == .chinese {
+                            if isShowingIntroContent {
+                                IntroContentView(
+                                    language: selectedLanguage,
+                                    isPlaying: isPlaying,
+                                    isPad: isPad
+                                )
+                                .padding(isPad ? 24 : 16)
+                                .padding(.bottom, 20)
+                            } else if selectedLanguage == .chinese {
                                 ChineseContentView(
                                     characterData: aiResponse.toBopomofoCharacter(),
                                     isPlaying: isPlaying,
                                     currentWordIndex: currentWordIndex,
                                     isUserScrolling: isUserScrolling,
+                                    isPad: isPad,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo(index, anchor: .center)
@@ -511,6 +742,7 @@ struct ContentView: View {
                                     isPlaying: isPlaying,
                                     currentSentenceIndex: currentSentenceIndex,
                                     isUserScrolling: isUserScrolling,
+                                    isPad: isPad,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo(index, anchor: .center)
@@ -523,6 +755,7 @@ struct ContentView: View {
                                     isPlaying: isPlaying,
                                     currentSentenceIndex: currentSentenceIndex,
                                     isUserScrolling: isUserScrolling,
+                                    isPad: isPad,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo(index, anchor: .center)
@@ -559,26 +792,30 @@ struct ContentView: View {
                     focusButton(proxy: proxy)
                 }
             }
-            .frame(height: isLandscape ? .infinity : geometry.size.height * 0.33)
+            .frame(maxWidth: cardMaxWidth)
+            .frame(height: conversationHeight)
             .background(Color.white.opacity(0.95))
             .cornerRadius(25)
             .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
-            .padding(.horizontal, isLandscape ? 0 : 24)
+            .padding(.horizontal, isLandscape ? (isPad ? 18 : 0) : (isPad ? 36 : 24))
         }
     }
     
     @ViewBuilder
     func controlsArea(isLandscape: Bool, isPad: Bool) -> some View {
-        let sidePadding: CGFloat = (isLandscape && !isPad) ? 10 : 30
+        let sidePadding: CGFloat = isPad ? 42 : ((isLandscape && !isPad) ? 10 : 30)
+        let primaryButtonSize: CGFloat = isPad ? 96 : 80
+        let primaryIconSize: CGFloat = isPad ? 34 : 30
+        let interruptButtonSize: CGFloat = isPad ? 72 : 60
         
         ZStack {
             if isPlaying {
                 HStack {
                     Button(action: { stopSpeaking() }) {
                         ZStack {
-                            Circle().fill(Color.ButtonRed).frame(width: 60, height: 60)
+                            Circle().fill(Color.ButtonRed).frame(width: interruptButtonSize, height: interruptButtonSize)
                                 .shadow(color: Color.ButtonRed.opacity(0.4), radius: 10, x: 0, y: 5)
-                            Image(systemName: "hand.raised.fill").font(.system(size: 24)).foregroundColor(.white)
+                            Image(systemName: "hand.raised.fill").font(.system(size: isPad ? 28 : 24)).foregroundColor(.white)
                         }
                     }
                     .padding(.leading, sidePadding)
@@ -595,28 +832,44 @@ struct ContentView: View {
                 ZStack {
                     Circle()
                         .fill(LinearGradient(gradient: Gradient(colors: isThinking ? [Color.ButtonRed] : (isRecording ? [Color.ButtonRed] : [Color.ButtonOrange, Color.ButtonRed])), startPoint: .topLeading, endPoint: .bottomTrailing))
-                        .frame(width: 80, height: 80)
+                        .frame(width: primaryButtonSize, height: primaryButtonSize)
                         .shadow(color: Color.ButtonRed.opacity(0.4), radius: 15, x: 0, y: 8)
                         .scaleEffect(isRecording ? 1.1 : 1.0)
                     
                     Image(systemName: isThinking ? "xmark" : (isRecording ? "square.fill" : "mic.fill"))
-                        .font(.system(size: 30))
+                        .font(.system(size: primaryIconSize))
                         .foregroundColor(.white)
                 }
             }
             .disabled(isPreparingRecording)
             
-            let canShowAgain = !isRecording && !isThinking && !isPreparingRecording && !isPlaying && !aiResponse.isEmpty
-            if canShowAgain {
+            let canShowActionButtons = !isRecording && !isThinking && !isPreparingRecording && !isPlaying && !aiResponse.isEmpty
+            if canShowActionButtons {
                 HStack {
                     Spacer()
-                    Button(action: { askExplainAgain() }) {
-                        VStack(spacing: 4) {
-                            Image(systemName: "arrow.triangle.2.circlepath").font(.system(size: 20))
-                            // 🔥 根據介紹狀態顯示不同文字
-                            Text(getAgainButtonText()).font(.system(size: 10, weight: .bold))
+                    Group {
+                        if needsIntro() {
+                            actionShortcutButton(
+                                icon: "sparkles",
+                                title: localizedText.introButton,
+                                isPad: isPad,
+                                action: { playIntroMessage() }
+                            )
+                        } else if !lastQuestion.isEmpty {
+                            actionShortcutButton(
+                                icon: "arrow.triangle.2.circlepath",
+                                title: localizedText.simplifyButton,
+                                isPad: isPad,
+                                action: { requestSimplerExplanation() }
+                            )
+                        } else {
+                            actionShortcutButton(
+                                icon: "speaker.wave.2.fill",
+                                title: localizedText.replayButton,
+                                isPad: isPad,
+                                action: { replayCurrentResponse() }
+                            )
                         }
-                        .foregroundColor(.white).padding(10).background(Color.MagicBlue).clipShape(Circle()).shadow(radius: 3)
                     }
                     .padding(.trailing, sidePadding)
                     .transition(.scale.combined(with: .opacity))
@@ -624,9 +877,26 @@ struct ContentView: View {
             }
         }
     }
+
+    @ViewBuilder
+    func actionShortcutButton(icon: String, title: String, isPad: Bool, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: isPad ? 20 : 18, weight: .semibold))
+                Text(title)
+                    .font(.system(size: isPad ? 11 : 10, weight: .bold, design: .rounded))
+            }
+            .frame(width: isPad ? 72 : 60, height: isPad ? 72 : 60)
+            .foregroundColor(.white)
+            .background(Color.MagicBlue)
+            .clipShape(Circle())
+            .shadow(color: Color.MagicBlue.opacity(0.28), radius: 8, x: 0, y: 4)
+        }
+    }
     
     @ViewBuilder
-    func footerArea(safeAreaBottom: CGFloat, isCompact: Bool) -> some View {
+    func footerArea(safeAreaBottom: CGFloat, isCompact: Bool, isPad: Bool) -> some View {
         if isCompact {
             HStack(spacing: 10) {
                 Text(localizedText.dataSourceCompact)
@@ -651,24 +921,25 @@ struct ContentView: View {
         } else {
             VStack(spacing: 10) {
                 Text(localizedText.dataSource)
-                    .font(.system(size: 12, weight: .bold))
+                    .font(.system(size: isPad ? 14 : 12, weight: .bold))
                     .foregroundColor(.red.opacity(0.8))
                 HStack(spacing: 15) {
                     Button(action: { showPrivacy = true }) {
                         Text(localizedText.privacyPolicy)
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: isPad ? 13 : 11, weight: .medium))
                             .underline()
                             .foregroundColor(.MagicBlue)
                     }
                     Text("|").font(.system(size: 11)).foregroundColor(.MagicBlue.opacity(0.5))
                     Button(action: { showEULA = true }) {
                         Text("EULA")
-                            .font(.system(size: 11, weight: .medium))
+                            .font(.system(size: isPad ? 13 : 11, weight: .medium))
                             .underline()
                             .foregroundColor(.MagicBlue)
                     }
                 }
             }
+            .frame(maxWidth: isPad ? 720 : .infinity)
             .padding(.bottom, safeAreaBottom > 0 ? 0 : 20)
             .layoutPriority(1)
         }
@@ -676,37 +947,57 @@ struct ContentView: View {
     
     @ViewBuilder
     func paywallContent() -> some View {
-        VStack(spacing: 0) {
-            PaywallView(displayCloseButton: true)
-                .onPurchaseCompleted { customerInfo in
-                    subManager.checkSubscriptionStatus()
-                    self.showPaywall = false
+        LocalizedPaywallView(
+            language: selectedLanguage,
+            onClose: {
+                showPaywall = false
+            },
+            onPurchaseCompleted: { customerInfo in
+                let isActive = subManager.applyCustomerInfo(customerInfo)
+                if isActive {
+                    showPaywall = false
                 }
-                .onRestoreCompleted { customerInfo in
-                    subManager.checkSubscriptionStatus()
-                    if subManager.isPro {
-                        self.showPaywall = false
-                    }
+                return isActive
+            },
+            onRestoreCompleted: { customerInfo in
+                let isActive = subManager.applyCustomerInfo(customerInfo)
+                if isActive {
+                    showPaywall = false
                 }
-            HStack(spacing: 20) {
-                Button("Privacy Policy") {
-                    showPrivacy = true
-                }
-                .font(.caption)
-                Text("|")
-                Button("Terms of Use (EULA)") {
-                    showEULA = true
-                }
-                .font(.caption)
+                return isActive
+            },
+            onPrivacy: {
+                showPrivacy = true
+            },
+            onTerms: {
+                showEULA = true
             }
-            .padding()
-            .foregroundColor(.gray)
-        }
+        )
     }
     
     // MARK: - 邏輯 Function
+
+    func persistLanguagePreference(_ language: AppLanguage, shouldSync: Bool = true) {
+        UserDefaults.standard.set(language.rawValue, forKey: Self.preferredLanguageKey)
+        if shouldSync {
+            PremiumCloudSyncManager.shared.pushLanguagePreference(language)
+        }
+    }
+
+    func syncLanguageWithSystemIfNeeded() {
+        guard !Self.hasStoredLanguagePreference() else { return }
+
+        let systemLanguage = Self.languageMatchingSystem()
+        guard systemLanguage != selectedLanguage else { return }
+
+        applyLanguage(systemLanguage, shouldPersist: false)
+    }
     
     func switchLanguage(to lang: AppLanguage) {
+        applyLanguage(lang, shouldPersist: true, shouldSync: true)
+    }
+
+    private func applyLanguage(_ lang: AppLanguage, shouldPersist: Bool, shouldSync: Bool = true) {
         // 更新本地化文字
         localizedText = LocalizedStrings(language: lang)
         
@@ -716,7 +1007,9 @@ struct ContentView: View {
         englishSentences = []
         userSpokenText = ""
         lastQuestion = ""
-        isThinking = false
+        lastTTSInput = ""
+        lastSpeechTicket = nil
+        resetAssistantWaitingState()
         isRecording = false
         isPreparingRecording = false
         isPlaying = false
@@ -727,6 +1020,9 @@ struct ContentView: View {
         currentWordIndex = 0
         currentSentenceIndex = 0
         selectedLanguage = lang
+        if shouldPersist {
+            persistLanguagePreference(lang, shouldSync: shouldSync)
+        }
 
         updateContentData()
         
@@ -738,7 +1034,7 @@ struct ContentView: View {
         userSpokenText = localizedText.quotaExceeded
         
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-            showParentalGate = true
+            showPaywall = true
         }
     }
     
@@ -756,27 +1052,59 @@ struct ContentView: View {
         }
     }
     
-    /// 取得按鈕顯示文字（介紹或聽不懂）
-    func getAgainButtonText() -> String {
-        if needsIntro() {
-            // 還沒播放過介紹，顯示「介紹」
-            switch selectedLanguage {
-            case .chinese: return "介紹"
-            case .english: return "Intro"
-            case .japanese: return "紹介"
-            }
-        } else {
-            // 已經播放過介紹，顯示「聽不懂/Again/もう一度」
-            switch selectedLanguage {
-            case .chinese: return "聽不懂"
-            case .english: return "Again"
-            case .japanese: return "もう一度"
+    func replayCurrentResponse() {
+        guard !needsIntro(), !aiResponse.isEmpty else {
+            playIntroMessage()
+            return
+        }
+
+        currentTask?.cancel()
+        beginAssistantWaiting(stage: .generatingVoice)
+        let textToReplay = aiResponse
+        currentWordIndex = 0
+        currentSentenceIndex = 0
+        isUserScrolling = false
+
+        currentTask = Task {
+            do {
+                let cleanText = textToReplay.cleanForTTS(language: selectedLanguage)
+                let audioData: Data
+                if !lastTTSInput.isEmpty, let lastSpeechTicket {
+                    audioData = try await OpenAIService.shared.generateSpeechAudio(
+                        ttsInput: lastTTSInput,
+                        language: selectedLanguage,
+                        speechTicket: lastSpeechTicket
+                    )
+                } else if let cached = await OpenAIService.shared.cachedAudioIfAvailable(for: cleanText, language: selectedLanguage) {
+                    audioData = cached
+                } else {
+                    throw OpenAIError.apiError("Missing speech ticket for replay")
+                }
+
+                await completeAssistantWaitingBeforePlayback()
+                if Task.isCancelled { return }
+
+                await playAudio(data: audioData, textToRead: textToReplay)
+            } catch {
+                if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
+                    print("🚫 重播任務已取消，靜默處理")
+                } else {
+                    await MainActor.run {
+                        resetAssistantWaitingState()
+                        userSpokenText = userFacingServiceErrorText(for: error)
+                    }
+                }
             }
         }
     }
-    
-    func askExplainAgain() {
-        if !subManager.isPro {
+
+    func requestSimplerExplanation() {
+        guard !lastQuestion.isEmpty else {
+            replayCurrentResponse()
+            return
+        }
+
+        if !subManager.hasVerifiedProAccess {
             if !subManager.isSubscriptionLoaded {
                 userSpokenText = localizedText.statusConnecting
                 return
@@ -790,24 +1118,19 @@ struct ContentView: View {
                 return
             }
         }
-        
-        // 🔥 優先判斷：如果還沒播放過介紹，就播放介紹
-        if needsIntro() {
-            playIntroMessage()
+
+        let questionToAsk = PromptVisibilitySanitizer.visibleQuestion(
+            from: lastQuestion,
+            language: selectedLanguage.rawValue
+        )
+        guard !questionToAsk.isEmpty else {
+            replayCurrentResponse()
             return
         }
-        
-        // 已經播放過介紹，執行原本的「聽不懂」邏輯
-        if lastQuestion.isEmpty {
-            // 如果沒有問題，就再播一次介紹
-            playIntroMessage()
-            return
-        }
-        
-        let questionToAsk = lastQuestion
+
         let prompt = localizedText.simplerExplanationPrompt(for: questionToAsk)
         userSpokenText = localizedText.simplerExplanationRequest
-        sendToAI(question: prompt)
+        sendToAI(question: prompt, historyQuestion: questionToAsk)
     }
     
     func checkFreeQuota() -> Bool {
@@ -1095,7 +1418,7 @@ struct ContentView: View {
     
     func stopSpeaking() {
         stopAudio()
-        isThinking = false
+        resetAssistantWaitingState()
     }
     
     func interruptAndListen() {
@@ -1105,7 +1428,7 @@ struct ContentView: View {
     func cancelThinking() {
         print("🛑 使用者手動取消思考")
         currentTask?.cancel()
-        isThinking = false
+        resetAssistantWaitingState()
         aiResponse = localizedText.cancelled
         updateContentData()
         let generator = UIImpactFeedbackGenerator(style: .medium)
@@ -1113,6 +1436,8 @@ struct ContentView: View {
     }
     
     func playIntroMessage() {
+        currentTask?.cancel()
+        beginAssistantWaiting(stage: .generatingVoice)
         let introText = localizedText.introMessage
         userSpokenText = localizedText.firstMeeting
         
@@ -1129,29 +1454,31 @@ struct ContentView: View {
         currentTask = Task {
             do {
                 let audioData: Data
+                let cleanText = introText.cleanForTTS(language: selectedLanguage)
                 
                 // 🚀 檢查是否有快取的音頻
                 if let cached = cachedIntroAudio[selectedLanguage] {
                     print("⚡️ 使用快取的自我介紹音頻")
                     audioData = cached
-                } else if let diskCached = loadIntroAudioFromDisk(for: selectedLanguage) {
-                    print("⚡️ 使用磁碟快取的自我介紹音頻")
-                    audioData = diskCached
+                } else if let sharedCached = await OpenAIService.shared.cachedAudioIfAvailable(for: cleanText, language: selectedLanguage) {
+                    print("⚡️ 使用共用快取的自我介紹音頻")
+                    audioData = sharedCached
                     await MainActor.run {
-                        cachedIntroAudio[selectedLanguage] = diskCached
+                        cachedIntroAudio[selectedLanguage] = sharedCached
                     }
                 } else {
                     // 沒有快取，生成新的
                     print("🎤 生成自我介紹音頻...")
-                    let cleanText = introText.cleanForTTS(language: selectedLanguage)
-                    audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: selectedLanguage)
+                    audioData = try await OpenAIService.shared.generateIntroAudio(from: cleanText, language: selectedLanguage)
                     
                     // 快取音頻以供下次使用
-                    saveIntroAudioToDisk(audioData, for: selectedLanguage)
                     await MainActor.run {
                         cachedIntroAudio[selectedLanguage] = audioData
                     }
                 }
+
+                await completeAssistantWaitingBeforePlayback()
+                if Task.isCancelled { return }
                 
                 await playAudio(data: audioData, textToRead: introText)
                 
@@ -1170,7 +1497,8 @@ struct ContentView: View {
             } catch {
                 print("❌ Intro TTS failed: \(error)")
                 await MainActor.run {
-                    userSpokenText = localizedText.errorNetwork
+                    resetAssistantWaitingState()
+                    userSpokenText = userFacingServiceErrorText(for: error)
                 }
             }
         }
@@ -1178,11 +1506,6 @@ struct ContentView: View {
     
     // 🚀 預載自我介紹音頻（背景執行）
     func preloadIntroAudio(for language: AppLanguage) {
-        if cachedIntroAudio[language] == nil, let diskCached = loadIntroAudioFromDisk(for: language) {
-            cachedIntroAudio[language] = diskCached
-            return
-        }
-        
         // 避免重複預載
         guard cachedIntroAudio[language] == nil, !preloadingIntroLanguages.contains(language) else { return }
         
@@ -1192,20 +1515,27 @@ struct ContentView: View {
             do {
                 let introText = LocalizedStrings(language: language).introMessage
                 let cleanText = introText.cleanForTTS(language: language)
+
+                if let sharedCached = await OpenAIService.shared.cachedAudioIfAvailable(for: cleanText, language: language) {
+                    await MainActor.run {
+                        cachedIntroAudio[language] = sharedCached
+                        _ = preloadingIntroLanguages.remove(language)
+                    }
+                    return
+                }
                 
                 print("🚀 開始預載 \(language.rawValue) 自我介紹音頻...")
-                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: language)
-                saveIntroAudioToDisk(audioData, for: language)
+                let audioData = try await OpenAIService.shared.generateIntroAudio(from: cleanText, language: language)
                 
                 await MainActor.run {
                     cachedIntroAudio[language] = audioData
-                    preloadingIntroLanguages.remove(language)
+                    _ = preloadingIntroLanguages.remove(language)
                     print("✅ \(language.rawValue) 自我介紹音頻預載完成")
                 }
             } catch {
                 print("❌ 預載自我介紹失敗: \(error)")
                 await MainActor.run {
-                    preloadingIntroLanguages.remove(language)
+                    _ = preloadingIntroLanguages.remove(language)
                 }
             }
         }
@@ -1215,25 +1545,6 @@ struct ContentView: View {
         for language in AppLanguage.allCases {
             preloadIntroAudio(for: language)
         }
-    }
-
-    private func introAudioURL(for language: AppLanguage) -> URL? {
-        guard let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first else {
-            return nil
-        }
-        let filename = "intro-\(language.rawValue).m4a"
-        return caches.appendingPathComponent(filename)
-    }
-    
-    private func loadIntroAudioFromDisk(for language: AppLanguage) -> Data? {
-        guard let url = introAudioURL(for: language),
-              FileManager.default.fileExists(atPath: url.path) else { return nil }
-        return try? Data(contentsOf: url)
-    }
-    
-    private func saveIntroAudioToDisk(_ data: Data, for language: AppLanguage) {
-        guard let url = introAudioURL(for: language) else { return }
-        try? data.write(to: url, options: [.atomic])
     }
     
     var statusText: String {
@@ -1254,6 +1565,87 @@ struct ContentView: View {
         return isPreparingRecording ? localizedText.hintPreparing :
                (isRecording ? localizedText.hintListening : localizedText.hintTapToSpeak)
     }
+
+    func beginAssistantWaiting(stage: AssistantWaitingStage) {
+        isThinking = true
+        assistantWaitingStage = stage
+        assistantWaitingProgress = stage.progressFloor
+        startAssistantWaitingTask(for: stage)
+    }
+
+    func transitionAssistantWaiting(to stage: AssistantWaitingStage) {
+        assistantWaitingStage = stage
+        let nextProgress = max(assistantWaitingProgress, stage.progressFloor)
+        withAnimation(.easeOut(duration: 0.2)) {
+            assistantWaitingProgress = nextProgress
+        }
+        startAssistantWaitingTask(for: stage)
+    }
+
+    func startAssistantWaitingTask(for stage: AssistantWaitingStage) {
+        assistantWaitingTask?.cancel()
+        assistantWaitingTask = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 120_000_000)
+                if Task.isCancelled { break }
+
+                await MainActor.run {
+                    guard isThinking, assistantWaitingStage == stage else { return }
+
+                    let nextProgress = min(
+                        stage.progressCeiling,
+                        assistantWaitingProgress + Double.random(in: stage.progressStepRange)
+                    )
+
+                    guard nextProgress > assistantWaitingProgress else { return }
+                    withAnimation(.easeOut(duration: 0.18)) {
+                        assistantWaitingProgress = nextProgress
+                    }
+                }
+            }
+        }
+    }
+
+    func resetAssistantWaitingState() {
+        assistantWaitingTask?.cancel()
+        assistantWaitingTask = nil
+        assistantWaitingStage = .craftingAnswer
+        assistantWaitingProgress = 0
+        isThinking = false
+    }
+
+    func userFacingServiceErrorText(for error: Error) -> String {
+        if case OpenAIError.backendUpgradeRequired = error {
+            return localizedText.backendUpgradeRequired
+        }
+
+        return localizedText.errorNetwork
+    }
+
+    func completeAssistantWaitingBeforePlayback() async {
+        await MainActor.run {
+            assistantWaitingTask?.cancel()
+            assistantWaitingTask = nil
+            assistantWaitingStage = .preparingPlayback
+            withAnimation(.easeOut(duration: 0.18)) {
+                assistantWaitingProgress = max(
+                    assistantWaitingProgress,
+                    AssistantWaitingStage.preparingPlayback.progressFloor
+                )
+            }
+        }
+
+        try? await Task.sleep(nanoseconds: 140_000_000)
+        if Task.isCancelled { return }
+
+        await MainActor.run {
+            withAnimation(.easeOut(duration: 0.2)) {
+                assistantWaitingProgress = 1.0
+            }
+        }
+
+        try? await Task.sleep(nanoseconds: 120_000_000)
+    }
     
     func checkServerStatus() {
         Task {
@@ -1263,7 +1655,7 @@ struct ContentView: View {
     }
     
     func startListening() {
-        if !subManager.isPro {
+        if !subManager.hasVerifiedProAccess {
             if !subManager.isSubscriptionLoaded {
                 userSpokenText = localizedText.statusConnecting
                 return
@@ -1371,29 +1763,42 @@ struct ContentView: View {
         sendToAI(question: userSpokenText)
     }
     
-    func sendToAI(question: String) {
+    func sendToAI(question: String, historyQuestion: String? = nil) {
         currentTask?.cancel()
-        isThinking = true
+        beginAssistantWaiting(stage: .craftingAnswer)
         
         currentTask = Task {
             do {
                 if Task.isCancelled { return }
                 
-                let answer = try await OpenAIService.shared.processMessage(
+                let requestedDepth: AIAnswerDepth = subManager.hasVerifiedProAccess ? .expanded : .standard
+                let answerResponse = try await OpenAIService.shared.processMessageWithMetadata(
                     userMessage: question,
-                    language: selectedLanguage
+                    language: selectedLanguage,
+                    answerDepth: requestedDepth
                 )
+                let answer = PromptVisibilitySanitizer.visibleAnswer(
+                    from: answerResponse.answer.trimmingCharacters(in: .whitespacesAndNewlines),
+                    language: selectedLanguage.rawValue
+                )
+                guard !answer.isEmpty else {
+                    throw OpenAIError.noData
+                }
                 
                 if Task.isCancelled { return }
                 
                 await MainActor.run {
                     HistoryManager.shared.addRecord(
-                        question: question,
+                        question: historyQuestion ?? question,
                         answer: answer,
                         language: localizedText.historyLanguageCode
                     )
-                    subManager.recordUsage()
+                    if !answerResponse.servedFromCache {
+                        subManager.recordUsage()
+                    }
                     
+                    lastTTSInput = answerResponse.ttsInput
+                    lastSpeechTicket = answerResponse.speechTicket
                     aiResponse = ""
                     aiResponse = answer
                     currentWordIndex = 0
@@ -1401,13 +1806,20 @@ struct ContentView: View {
                     isUserScrolling = false
                     markIntroAsUsed(for: selectedLanguage)
                     updateContentData()
+                    transitionAssistantWaiting(to: .generatingVoice)
                 }
                 
                 if Task.isCancelled { return }
                 
-                let cleanText = answer.cleanForTTS(language: selectedLanguage)
-                let audioData = try await OpenAIService.shared.generateAudio(from: cleanText, language: selectedLanguage)
+                let audioData = try await OpenAIService.shared.generateSpeechAudio(
+                    ttsInput: answerResponse.ttsInput,
+                    language: selectedLanguage,
+                    speechTicket: answerResponse.speechTicket
+                )
                 
+                if Task.isCancelled { return }
+
+                await completeAssistantWaitingBeforePlayback()
                 if Task.isCancelled { return }
                 
                 await playAudio(data: audioData, textToRead: answer)
@@ -1415,11 +1827,16 @@ struct ContentView: View {
             } catch {
                 if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
                     print("🚫 任務已取消，靜默處理")
+                } else if case OpenAIError.quotaExceeded = error {
+                    await MainActor.run {
+                        resetAssistantWaitingState()
+                        triggerPaywall()
+                    }
                 } else {
                     await MainActor.run {
-                        aiResponse = localizedText.errorNetwork
+                        resetAssistantWaitingState()
+                        aiResponse = userFacingServiceErrorText(for: error)
                         print("❌ 真實錯誤原因: \(error.localizedDescription)")
-                        isThinking = false
                         updateContentData()
                     }
                 }
@@ -1431,13 +1848,14 @@ struct ContentView: View {
     func playAudio(data: Data, textToRead: String) async {
         do {
             stopAudio()
+            beginPlaybackIdleTimerProtection()
             isPlaying = true
             isUserScrolling = false
             SpeechService.shared.configureAudioSession(isRecording: false)
             
             audioPlayer = try AVAudioPlayer(data: data)
             audioPlayer?.prepareToPlay()
-            audioPlayer?.volume = 1.0
+            audioPlayer?.volume = 0.86
             
             // 檢查合理的時長，避免字幕瞬間刷完
             let duration = audioPlayer?.duration ?? 0
@@ -1447,13 +1865,14 @@ struct ContentView: View {
             if duration <= 0.2 {
                 // 不合理的音訊長度：停用字幕同步，只做最基本播放
                 audioPlayer?.play()
-                isThinking = false
+                resetAssistantWaitingState()
                 currentWordIndex = 0
                 isPlaying = true
                 // 直接在一秒後結束字幕同步
                 DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
                     self.currentWordIndex = (self.selectedLanguage == .chinese) ? (textToRead.count) : (textToRead.count)
                     self.isPlaying = false
+                    self.endPlaybackIdleTimerProtection()
                 }
                 return
             }
@@ -1463,7 +1882,7 @@ struct ContentView: View {
             
             audioPlayer?.play()
             
-            isThinking = false
+            resetAssistantWaitingState()
             
             // 🔥 計算實際會發音的字符數量
             let totalChars: Int
@@ -1527,6 +1946,7 @@ struct ContentView: View {
             textTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
                 guard let player = self.audioPlayer else {
                     timer.invalidate()
+                    self.endPlaybackIdleTimerProtection()
                     return
                 }
                 
@@ -1616,12 +2036,14 @@ struct ContentView: View {
                     self.currentWordIndex = endIndex
                     self.currentSentenceIndex = max(0, self.englishSentences.count - 1)
                     self.isPlaying = false
+                    self.endPlaybackIdleTimerProtection()
                 }
             }
         } catch {
             print("❌ Playback failed: \(error)")
-            isThinking = false
+            resetAssistantWaitingState()
             isPlaying = false
+            endPlaybackIdleTimerProtection()
         }
     }
     
@@ -1630,6 +2052,20 @@ struct ContentView: View {
         textTimer?.invalidate()
         textTimer = nil
         isPlaying = false
+        endPlaybackIdleTimerProtection()
+    }
+
+    func beginPlaybackIdleTimerProtection() {
+        if idleTimerStateBeforePlayback == nil {
+            idleTimerStateBeforePlayback = UIApplication.shared.isIdleTimerDisabled
+        }
+        UIApplication.shared.isIdleTimerDisabled = true
+    }
+
+    func endPlaybackIdleTimerProtection() {
+        guard let previousState = idleTimerStateBeforePlayback else { return }
+        UIApplication.shared.isIdleTimerDisabled = previousState
+        idleTimerStateBeforePlayback = nil
     }
 
     func markIntroAsUsed(for language: AppLanguage) {
@@ -1668,32 +2104,220 @@ struct ContentView: View {
     }
 }
 
+struct IntroContentView: View {
+    let language: AppLanguage
+    let isPlaying: Bool
+    let isPad: Bool
+
+    private var title: String {
+        switch language {
+        case .chinese:
+            return "安安老師"
+        case .english:
+            return "Teacher An-An"
+        case .japanese:
+            return "あんあん先生(せんせい)"
+        }
+    }
+
+    private var subtitle: String {
+        switch language {
+        case .chinese:
+            return "你的第一本 AI 百科全書"
+        case .english:
+            return "Your first AI encyclopedia"
+        case .japanese:
+            return "はじめての AI 百科事典(ひゃっかじてん)"
+        }
+    }
+
+    private var message: String {
+        switch language {
+        case .chinese:
+            return "我會用小朋友聽得懂的方式，陪你認識自然、數字、世界、宇宙、故事和每天的生活。"
+        case .english:
+            return "I explain nature, numbers, the world, space, stories, history, and everyday life in a kid-friendly way."
+        case .japanese:
+            return "自然(しぜん)、数(かず)、世界(せかい)、宇宙(うちゅう)、言葉(ことば)、歴史(れきし)、毎日(まいにち)のことを、やさしく楽(たの)しく話(はな)すよ。"
+        }
+    }
+
+    private var topics: [(symbol: String, title: String)] {
+        switch language {
+        case .chinese:
+            return [
+                ("leaf.fill", "自然"),
+                ("number.circle.fill", "數學"),
+                ("globe.asia.australia.fill", "地理"),
+                ("sparkles", "天文"),
+                ("text.book.closed.fill", "語文"),
+                ("clock.fill", "歷史"),
+                ("house.fill", "生活")
+            ]
+        case .english:
+            return [
+                ("leaf.fill", "Nature"),
+                ("number.circle.fill", "Math"),
+                ("globe.asia.australia.fill", "Geography"),
+                ("sparkles", "Space"),
+                ("text.book.closed.fill", "Language"),
+                ("clock.fill", "History"),
+                ("house.fill", "Life")
+            ]
+        case .japanese:
+            return [
+                ("leaf.fill", "自然"),
+                ("number.circle.fill", "算数"),
+                ("globe.asia.australia.fill", "地理"),
+                ("sparkles", "宇宙"),
+                ("text.book.closed.fill", "言葉"),
+                ("clock.fill", "歴史"),
+                ("house.fill", "生活")
+            ]
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: isPad ? 24 : 18) {
+            HStack(alignment: .center, spacing: isPad ? 18 : 14) {
+                ZStack {
+                    Circle()
+                        .fill(Color.MagicBlue.opacity(0.12))
+
+                    Circle()
+                        .stroke(Color.MagicBlue.opacity(isPlaying ? 0.42 : 0.22), lineWidth: isPad ? 4 : 3)
+                        .scaleEffect(isPlaying ? 1.08 : 1.0)
+                        .animation(
+                            isPlaying ? .easeInOut(duration: 0.9).repeatForever(autoreverses: true) : .default,
+                            value: isPlaying
+                        )
+
+                    Image(systemName: "book.closed.fill")
+                        .font(.system(size: isPad ? 38 : 30, weight: .bold))
+                        .foregroundColor(.MagicBlue)
+                }
+                .frame(width: isPad ? 92 : 72, height: isPad ? 92 : 72)
+
+                VStack(alignment: .leading, spacing: isPad ? 7 : 5) {
+                    if language == .japanese {
+                        FuriganaText(
+                            title,
+                            fontSize: isPad ? 29 : 23,
+                            fontWeight: .heavy,
+                            textColor: .DarkText,
+                            lineSpacing: isPad ? 6 : 5
+                        )
+
+                        FuriganaText(
+                            subtitle,
+                            fontSize: isPad ? 16 : 13,
+                            fontWeight: .bold,
+                            textColor: .MagicBlue,
+                            lineSpacing: isPad ? 5 : 4
+                        )
+                    } else {
+                        Text(title)
+                            .font(.system(size: isPad ? 31 : 25, weight: .heavy, design: .rounded))
+                            .foregroundColor(.DarkText)
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.75)
+
+                        Text(subtitle)
+                            .font(.system(size: isPad ? 17 : 14, weight: .bold, design: .rounded))
+                            .foregroundColor(.MagicBlue)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+
+                Spacer(minLength: 0)
+            }
+
+            if language == .japanese {
+                FuriganaText(
+                    message,
+                    fontSize: isPad ? 20 : 17,
+                    fontWeight: .semibold,
+                    textColor: .DarkText.opacity(0.86),
+                    lineSpacing: isPad ? 13 : 11
+                )
+            } else {
+                Text(message)
+                    .font(.system(size: isPad ? 21 : 18, weight: .semibold, design: .rounded))
+                    .foregroundColor(.DarkText.opacity(0.86))
+                    .lineSpacing(isPad ? 7 : 5)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            FlowLayout(spacing: isPad ? 10 : 8, lineSpacing: isPad ? 10 : 8) {
+                ForEach(Array(topics.enumerated()), id: \.offset) { _, topic in
+                    IntroTopicChip(
+                        symbol: topic.symbol,
+                        title: topic.title,
+                        isPad: isPad
+                    )
+                }
+            }
+        }
+        .frame(maxWidth: isPad ? 740 : .infinity, alignment: .leading)
+    }
+}
+
+struct IntroTopicChip: View {
+    let symbol: String
+    let title: String
+    let isPad: Bool
+
+    var body: some View {
+        HStack(spacing: isPad ? 7 : 6) {
+            Image(systemName: symbol)
+                .font(.system(size: isPad ? 14 : 12, weight: .bold))
+                .foregroundColor(.MagicBlue)
+                .frame(width: isPad ? 18 : 15)
+
+            Text(title)
+                .font(.system(size: isPad ? 15 : 13, weight: .bold, design: .rounded))
+                .foregroundColor(.DarkText.opacity(0.78))
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+        }
+        .padding(.vertical, isPad ? 9 : 7)
+        .padding(.horizontal, isPad ? 12 : 10)
+        .frame(minHeight: isPad ? 38 : 34)
+        .background(Color.MagicBlue.opacity(0.08))
+        .clipShape(Capsule())
+    }
+}
+
 // MARK: - 新增獨立中文內容視圖（卡拉OK效果）
 struct ChineseContentView: View {
     let characterData: [(char: String, bopomofo: String)]
     let isPlaying: Bool
     let currentWordIndex: Int
     let isUserScrolling: Bool
+    let isPad: Bool
     let onScrollTo: (Int) -> Void
-    
+
     var body: some View {
-        LazyVGrid(columns: [GridItem(.adaptive(minimum: 38), spacing: 2)], alignment: .leading, spacing: 10) {
+        FlowLayout(spacing: isPad ? 8 : 6, lineSpacing: isPad ? 13 : 12) {
             ForEach(Array(characterData.enumerated()), id: \.offset) { index, item in
                 ChineseCharacterView(
                     character: item.char,
                     bopomofo: item.bopomofo,
                     index: index,
                     currentIndex: currentWordIndex,
-                    isPlaying: isPlaying
+                    isPlaying: isPlaying,
+                    isPad: isPad
                 )
                 .id(index)
             }
         }
-        .padding()
+        .frame(maxWidth: isPad ? 760 : .infinity, alignment: .leading)
+        .padding(isPad ? 24 : 16)
         .onChange(of: currentWordIndex) { _, newIndex in
-            if newIndex > 0 && !isUserScrolling {
-                onScrollTo(newIndex)
-            }
+            guard !isUserScrolling, !characterData.isEmpty else { return }
+            let clampedIndex = min(max(newIndex, 0), characterData.count - 1)
+            guard clampedIndex > 0 else { return }
+            onScrollTo(clampedIndex)
         }
     }
 }
@@ -1705,28 +2329,40 @@ struct ChineseCharacterView: View {
     let index: Int
     let currentIndex: Int
     let isPlaying: Bool
-    
+    let isPad: Bool
+
     var body: some View {
         let isCurrent = index == currentIndex  // 正在唸
+        let normalizedBopomofo = bopomofo
+            .replacingOccurrences(of: " ", with: "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let isWhitespace = character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let cellWidth: CGFloat = isPad ? 48 : 40
+        let displayWidth: CGFloat = isWhitespace ? cellWidth * 0.45 : cellWidth
+        let cellHeight: CGFloat = isPad ? 58 : 50
+        let bopomofoHeight: CGFloat = isPad ? 17 : 14
+        let characterSize: CGFloat = isPad ? 31 : 25
         
-        VStack(spacing: 0) {
-            // 注音符號
-            if !bopomofo.isEmpty {
-                Text(bopomofo)
-                    .font(.system(size: 10, weight: .regular))
-                    .foregroundColor(getBopomofoColor())
-                    .opacity(getBopomofoOpacity())
-                    .fixedSize()
-            }
+        VStack(spacing: 1) {
+            Text(normalizedBopomofo.isEmpty ? " " : normalizedBopomofo)
+                .font(.system(size: isPad ? 12 : 10, weight: .regular, design: .rounded))
+                .foregroundColor(getBopomofoColor())
+                .opacity(normalizedBopomofo.isEmpty ? 0 : getBopomofoOpacity())
+                .lineLimit(1)
+                .minimumScaleFactor(0.58)
+                .frame(width: displayWidth, height: bopomofoHeight, alignment: .center)
             
-            // 漢字
             Text(character)
-                .font(.system(size: 26, weight: isCurrent ? .heavy : .bold, design: .rounded))
+                .font(.system(size: characterSize, weight: isCurrent ? .heavy : .bold, design: .rounded))
                 .foregroundColor(getCharacterColor())
                 .shadow(color: isCurrent && isPlaying ? Color.MagicBlue.opacity(0.5) : .clear, radius: 8)
+                .frame(width: displayWidth, height: cellHeight - bopomofoHeight - 1, alignment: .center)
         }
-        .frame(minWidth: 38)
-        .scaleEffect(isCurrent && isPlaying ? 1.25 : 1.0)
+        .frame(width: displayWidth, height: cellHeight, alignment: .center)
+        .background(
+            RoundedRectangle(cornerRadius: isPad ? 12 : 10, style: .continuous)
+                .fill(isCurrent && isPlaying ? Color.ButtonOrange.opacity(0.12) : Color.clear)
+        )
         .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isCurrent)
     }
     
@@ -1780,21 +2416,27 @@ struct EnglishContentView: View {
     let isPlaying: Bool
     let currentSentenceIndex: Int
     let isUserScrolling: Bool
+    let isPad: Bool
     let onScrollTo: (Int) -> Void
     
     var body: some View {
-        VStack(spacing: 12) {
+        let inactiveFontSize: CGFloat = isPad ? 19 : 18
+        let activeFontSize: CGFloat = isPad ? 22 : 20
+
+        VStack(spacing: isPad ? 16 : 12) {
             ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
                 let isActive = isPlaying && (index == currentSentenceIndex)
                 
                 Text(sentence)
-                    .font(.system(size: isActive ? 20 : 18, weight: isActive ? .bold : .regular, design: .rounded))
+                    .font(.system(size: isActive ? activeFontSize : inactiveFontSize, weight: isActive ? .bold : .regular, design: .rounded))
                     .foregroundColor(isActive ? .MagicBlue : .gray.opacity(0.7))
                     .multilineTextAlignment(.leading)
-                    .padding()
+                    .lineSpacing(isPad ? 6 : 4)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(isPad ? 20 : 16)
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(isActive ? Color.white : Color.white.opacity(0.5))
-                    .cornerRadius(16)
+                    .cornerRadius(isPad ? 20 : 16)
                     .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
                     .scaleEffect(isActive ? 1.02 : 1.0)
                     .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
@@ -1810,7 +2452,8 @@ struct EnglishContentView: View {
                     .opacity(isPlaying ? 0 : 1)
             }
         }
-        .padding()
+        .frame(maxWidth: isPad ? 760 : .infinity, alignment: .leading)
+        .padding(isPad ? 24 : 16)
         .padding(.bottom, 40)
         .onChange(of: currentSentenceIndex) { _, newIndex in
             if !isUserScrolling {
@@ -1826,24 +2469,30 @@ struct JapaneseContentView: View {
     let isPlaying: Bool
     let currentSentenceIndex: Int
     let isUserScrolling: Bool
+    let isPad: Bool
     let onScrollTo: (Int) -> Void
     
     var body: some View {
-        VStack(spacing: 12) {
+        let inactiveFontSize: CGFloat = isPad ? 19 : 18
+        let activeFontSize: CGFloat = isPad ? 22 : 20
+        let rubyLineSpacing: CGFloat = isPad ? 12 : 11
+
+        VStack(spacing: isPad ? 16 : 12) {
             ForEach(Array(japaneseSentences.enumerated()), id: \.offset) { index, sentence in
                 let isActive = isPlaying && (index == currentSentenceIndex)
                 
                 // 🇯🇵 使用新的 FuriganaText 顯示振假名（漢字正上方）
                 FuriganaText(
                     sentence,
-                    fontSize: isActive ? 20 : 18,
+                    fontSize: isActive ? activeFontSize : inactiveFontSize,
                     fontWeight: isActive ? .bold : .regular,
-                    textColor: isActive ? .MagicBlue : .gray.opacity(0.7)
+                    textColor: isActive ? .MagicBlue : .gray.opacity(0.7),
+                    lineSpacing: rubyLineSpacing
                 )
-                .padding()
+                .padding(isPad ? 20 : 16)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(isActive ? Color.white : Color.white.opacity(0.5))
-                .cornerRadius(16)
+                .cornerRadius(isPad ? 20 : 16)
                 .shadow(color: Color.black.opacity(isActive ? 0.1 : 0), radius: 4, x: 0, y: 2)
                 .scaleEffect(isActive ? 1.02 : 1.0)
                 .animation(isActive ? .spring() : .none, value: isPlaying ? currentSentenceIndex : 0)
@@ -1859,7 +2508,8 @@ struct JapaneseContentView: View {
                     .opacity(isPlaying ? 0 : 1)
             }
         }
-        .padding()
+        .frame(maxWidth: isPad ? 760 : .infinity, alignment: .leading)
+        .padding(isPad ? 24 : 16)
         .padding(.bottom, 40)
         .onChange(of: currentSentenceIndex) { _, newIndex in
             if !isUserScrolling {
@@ -2016,10 +2666,11 @@ struct JapaneseWordFlowContentView: View {
                 fullText,
                 fontSize: 20,
                 fontWeight: .regular,
-                textColor: .gray.opacity(0.8)
+                textColor: .gray.opacity(0.8),
+                lineSpacing: 14
             )
         } else {
-            FlowLayout(spacing: 4) {
+            FlowLayout(spacing: 4, lineSpacing: 14) {
                 ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
                     let tokenIndex = token.id
                     let isCurrent = isPlaying && token.isWord && tokenIndex == currentWordIndex
@@ -2039,9 +2690,9 @@ struct JapaneseWordFlowContentView: View {
                             token.text,
                             fontSize: isCurrent ? 22 : 20,
                             fontWeight: isCurrent ? .bold : .regular,
-                            textColor: color
+                            textColor: color,
+                            lineSpacing: 14
                         )
-                        .scaleEffect(isCurrent ? 1.06 : 1.0)
                         .animation(.spring(response: 0.2, dampingFraction: 0.7), value: currentWordIndex)
                         .id(token.id)
                     } else {
@@ -2067,13 +2718,539 @@ struct JapaneseWordFlowContentView: View {
     }
 }
 
+struct LocalizedPaywallView: View {
+    let language: AppLanguage
+    let onClose: () -> Void
+    let onPurchaseCompleted: (CustomerInfo) -> Bool
+    let onRestoreCompleted: (CustomerInfo) -> Bool
+    let onPrivacy: () -> Void
+    let onTerms: () -> Void
+
+    @State private var offering: Offering?
+    @State private var isLoadingPlans = true
+    @State private var purchasingPackageID: String?
+    @State private var isRestoring = false
+    @State private var messageText: String?
+    @State private var pendingPackage: Package?
+    @State private var showParentalGate = false
+
+    private var localizedText: LocalizedStrings {
+        LocalizedStrings(language: language)
+    }
+
+    private var displayedPackages: [Package] {
+        guard let offering else { return [] }
+
+        let available = offering.availablePackages
+        var ordered: [Package] = []
+
+        if let monthly = offering.monthly {
+            ordered.append(monthly)
+        }
+        if let annual = offering.annual {
+            ordered.append(annual)
+        }
+
+        let remainingSubscriptionPackages = available.filter { package in
+            !ordered.contains(where: { $0.identifier == package.identifier })
+                && (planKind(for: package) == .monthly || planKind(for: package) == .annual)
+        }
+        ordered.append(contentsOf: remainingSubscriptionPackages)
+
+        if ordered.isEmpty {
+            ordered = available
+        }
+
+        return ordered
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            ZStack {
+                paywallBackground
+
+                ScrollView(showsIndicators: false) {
+                    VStack(spacing: 14) {
+                        header
+                        benefitCard
+                        plansSection
+                        restoreSection
+                        legalSection
+                    }
+                    .padding(.horizontal, geometry.size.width >= 700 ? 32 : 18)
+                    .padding(.top, geometry.size.width >= 700 ? 28 : 20)
+                    .padding(.bottom, 24)
+                    .frame(maxWidth: 560)
+                    .frame(maxWidth: .infinity)
+                }
+
+                if showParentalGate {
+                    Color.black.opacity(0.18)
+                        .ignoresSafeArea()
+                        .transition(.opacity)
+
+                    ParentalGateView(isPresented: $showParentalGate, language: language) {
+                        guard let package = pendingPackage else { return }
+                        Task {
+                            await purchase(package)
+                        }
+                    }
+                    .transition(.scale.combined(with: .opacity))
+                    .zIndex(20)
+                }
+            }
+        }
+        .task {
+            await loadOfferings()
+        }
+    }
+
+    private var paywallBackground: some View {
+        LinearGradient(
+            colors: [
+                Color(red: 0.98, green: 0.96, blue: 0.91),
+                Color(red: 0.94, green: 0.97, blue: 0.98)
+            ],
+            startPoint: .top,
+            endPoint: .bottom
+        )
+        .ignoresSafeArea()
+    }
+
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top) {
+                Text("WonderKidAI PRO")
+                    .font(.system(size: 12, weight: .heavy, design: .rounded))
+                    .foregroundColor(.MagicBlue)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(Color.MagicBlue.opacity(0.1), in: Capsule())
+
+                Spacer()
+
+                Button(action: onClose) {
+                    Image(systemName: "xmark")
+                        .font(.system(size: 14, weight: .bold))
+                        .foregroundColor(.DarkText.opacity(0.55))
+                        .frame(width: 34, height: 34)
+                        .background(Color.black.opacity(0.04), in: Circle())
+                }
+                .accessibilityLabel(localizedText.paywallCloseLabel)
+            }
+
+            Text(localizedText.paywallTitle)
+                .font(.system(size: 28, weight: .heavy, design: .rounded))
+                .foregroundColor(.DarkText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(localizedText.paywallSubtitle)
+                .font(.system(size: 16, weight: .medium, design: .rounded))
+                .foregroundColor(.DarkText.opacity(0.72))
+                .multilineTextAlignment(.leading)
+                .lineSpacing(4)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(20)
+        .background(
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .fill(Color.white.opacity(0.96))
+        )
+        .overlay(cardBorder(cornerRadius: 24))
+    }
+
+    private var benefitCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(localizedText.paywallBenefits.enumerated()), id: \.offset) { index, benefit in
+                HStack(alignment: .top, spacing: 11) {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 18, weight: .bold))
+                        .foregroundColor(index == 0 ? .ButtonOrange : .MagicBlue)
+                        .padding(.top, 1)
+
+                    Text(benefit)
+                        .font(.system(size: 15, weight: .semibold, design: .rounded))
+                        .foregroundColor(.DarkText.opacity(0.78))
+                        .lineSpacing(3)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 0)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(18)
+        .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay(cardBorder(cornerRadius: 22))
+    }
+
+    @ViewBuilder
+    private var plansSection: some View {
+        VStack(spacing: 12) {
+            if isLoadingPlans {
+                VStack(spacing: 12) {
+                    ProgressView()
+                        .progressViewStyle(CircularProgressViewStyle(tint: .MagicBlue))
+                    Text(localizedText.paywallLoadingPlans)
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundColor(.DarkText.opacity(0.65))
+                }
+                .padding(.vertical, 22)
+                .frame(maxWidth: .infinity)
+                .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay(cardBorder(cornerRadius: 22))
+            } else if displayedPackages.isEmpty {
+                Text(localizedText.paywallNoPlans)
+                    .font(.system(size: 14, weight: .bold, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.ButtonRed)
+                    .padding(18)
+                    .frame(maxWidth: .infinity)
+                    .background(Color.white.opacity(0.94), in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                    .overlay(cardBorder(cornerRadius: 22))
+            } else {
+                ForEach(displayedPackages, id: \.identifier) { package in
+                    planButton(for: package)
+                }
+            }
+
+            if let messageText {
+                Text(messageText)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .multilineTextAlignment(.center)
+                    .foregroundColor(.ButtonRed)
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private var restoreSection: some View {
+        VStack(spacing: 10) {
+            if purchasingPackageID != nil {
+                Text(localizedText.paywallPurchaseInProgress)
+                    .font(.system(size: 12, weight: .semibold, design: .rounded))
+                    .foregroundColor(.DarkText.opacity(0.62))
+            }
+
+            Button {
+                Task {
+                    await restorePurchases()
+                }
+            } label: {
+                if isRestoring {
+                    HStack(spacing: 8) {
+                        ProgressView()
+                            .scaleEffect(0.75)
+                        Text(localizedText.paywallRestoreInProgress)
+                    }
+                } else {
+                    Text(localizedText.paywallRestoreButton)
+                }
+            }
+            .font(.system(size: 13, weight: .bold, design: .rounded))
+            .foregroundColor(.DarkText.opacity(0.66))
+            .padding(.vertical, 4)
+            .disabled(isRestoring || purchasingPackageID != nil)
+        }
+    }
+
+    private var legalSection: some View {
+        VStack(spacing: 10) {
+            Text(localizedText.paywallFootnote)
+                .font(.system(size: 11, weight: .medium, design: .rounded))
+                .multilineTextAlignment(.center)
+                .foregroundColor(.DarkText.opacity(0.48))
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 18) {
+                Button(localizedText.privacyPolicy, action: onPrivacy)
+                Text("|")
+                    .foregroundColor(.DarkText.opacity(0.24))
+                Button(localizedText.termsOfUse, action: onTerms)
+            }
+            .font(.system(size: 12, weight: .semibold, design: .rounded))
+            .foregroundColor(.DarkText.opacity(0.56))
+        }
+        .padding(.top, 2)
+    }
+
+    private func planButton(for package: Package) -> some View {
+        let kind = planKind(for: package)
+        let isPurchasing = purchasingPackageID == package.identifier
+        let isFeatured = kind == .annual
+        let accentColor: Color = isFeatured ? .ButtonOrange : .MagicBlue
+
+        return Button {
+            pendingPackage = package
+            showParentalGate = true
+        } label: {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(alignment: .top, spacing: 12) {
+                    VStack(alignment: .leading, spacing: 7) {
+                        HStack(spacing: 8) {
+                            Text(planTitle(for: package))
+                                .font(.system(size: 18, weight: .heavy, design: .rounded))
+                                .foregroundColor(.DarkText)
+
+                            if kind == .annual {
+                                Text(localizedText.paywallBestValueBadge)
+                                    .font(.system(size: 10, weight: .heavy, design: .rounded))
+                                    .foregroundColor(.white)
+                                    .padding(.horizontal, 8)
+                                    .padding(.vertical, 4)
+                                    .background(accentColor, in: Capsule())
+                            }
+                        }
+
+                        Text(planSubtitle(for: package))
+                            .font(.system(size: 13, weight: .medium, design: .rounded))
+                            .foregroundColor(.DarkText.opacity(0.62))
+                            .lineSpacing(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+
+                    Spacer(minLength: 8)
+
+                    Text("\(package.localizedPriceString)\(periodSuffix(for: package))")
+                        .font(.system(size: 17, weight: .heavy, design: .rounded))
+                        .foregroundColor(accentColor)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                }
+
+                HStack(spacing: 8) {
+                    if isPurchasing {
+                        ProgressView()
+                            .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                            .scaleEffect(0.72)
+                    }
+
+                    Text(localizedText.paywallSubscribeButton)
+                        .font(.system(size: 15, weight: .heavy, design: .rounded))
+                }
+                .foregroundColor(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 12)
+                .background(accentColor, in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+            }
+            .padding(16)
+            .frame(maxWidth: .infinity)
+            .background(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .fill(Color.white.opacity(0.98))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 22, style: .continuous)
+                    .stroke(accentColor.opacity(isFeatured ? 0.38 : 0.12), lineWidth: 1)
+            )
+            .shadow(color: Color.black.opacity(0.04), radius: 8, x: 0, y: 4)
+        }
+        .buttonStyle(.plain)
+        .disabled(purchasingPackageID != nil || isRestoring)
+    }
+
+    private func cardBorder(cornerRadius: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+            .stroke(Color.DarkText.opacity(0.08), lineWidth: 1)
+    }
+
+    private func loadOfferings() async {
+        isLoadingPlans = true
+        messageText = nil
+
+        do {
+            let offerings = try await Purchases.shared.offerings()
+            offering = offerings.current ?? offerings.all.values.first
+        } catch {
+            messageText = localizedText.paywallNoPlans
+        }
+
+        isLoadingPlans = false
+    }
+
+    private func purchase(_ package: Package) async {
+        guard purchasingPackageID == nil, !isRestoring else { return }
+
+        purchasingPackageID = package.identifier
+        pendingPackage = nil
+        messageText = nil
+        defer { purchasingPackageID = nil }
+
+        do {
+            let (_, customerInfo, userCancelled) = try await Purchases.shared.purchase(package: package)
+            guard !userCancelled else { return }
+            if !onPurchaseCompleted(customerInfo) {
+                messageText = localizedText.paywallPurchaseFailed
+            }
+        } catch {
+            messageText = localizedText.paywallPurchaseFailed
+        }
+    }
+
+    private func restorePurchases() async {
+        guard purchasingPackageID == nil, !isRestoring else { return }
+
+        isRestoring = true
+        messageText = nil
+        defer { isRestoring = false }
+
+        do {
+            let customerInfo = try await Purchases.shared.restorePurchases()
+            if !onRestoreCompleted(customerInfo) {
+                messageText = localizedText.paywallRestoreFailed
+            }
+        } catch {
+            messageText = localizedText.paywallRestoreFailed
+        }
+    }
+
+    private enum PlanKind {
+        case monthly
+        case annual
+        case other
+    }
+
+    private func planKind(for package: Package) -> PlanKind {
+        switch package.packageType {
+        case .monthly:
+            return .monthly
+        case .annual:
+            return .annual
+        default:
+            let identifier = package.storeProduct.productIdentifier.lowercased()
+            if identifier.contains("year") || identifier.contains("annual") {
+                return .annual
+            }
+            if identifier.contains("month") {
+                return .monthly
+            }
+            return .other
+        }
+    }
+
+    private func planTitle(for package: Package) -> String {
+        switch planKind(for: package) {
+        case .monthly:
+            return localizedText.paywallMonthlyTitle
+        case .annual:
+            return localizedText.paywallYearlyTitle
+        case .other:
+            return package.storeProduct.localizedTitle
+        }
+    }
+
+    private func planSubtitle(for package: Package) -> String {
+        switch planKind(for: package) {
+        case .monthly:
+            return localizedText.paywallMonthlySubtitle
+        case .annual:
+            return localizedText.paywallYearlySubtitle
+        case .other:
+            return package.storeProduct.localizedDescription
+        }
+    }
+
+    private func periodSuffix(for package: Package) -> String {
+        switch (language, planKind(for: package)) {
+        case (.chinese, .monthly):
+            return " / 月"
+        case (.chinese, .annual):
+            return " / 年"
+        case (.english, .monthly):
+            return " / month"
+        case (.english, .annual):
+            return " / year"
+        case (.japanese, .monthly):
+            return " / 月"
+        case (.japanese, .annual):
+            return " / 年"
+        default:
+            return ""
+        }
+    }
+
+    private func benefitIcon(for index: Int) -> String {
+        switch index {
+        case 0:
+            return "infinity"
+        case 1:
+            return "text.bubble.fill"
+        case 2:
+            return "waveform"
+        default:
+            return "icloud.fill"
+        }
+    }
+
+    private func benefitColor(for index: Int) -> Color {
+        switch index {
+        case 0:
+            return .ButtonOrange
+        case 1:
+            return .MagicBlue
+        case 2:
+            return .ButtonRed
+        default:
+            return .MagicBlue
+        }
+    }
+}
+
 struct ParentalGateView: View {
+    private struct Challenge {
+        enum Operation: Equatable {
+            case add
+            case subtract
+
+            var symbol: String {
+                switch self {
+                case .add: return "+"
+                case .subtract: return "-"
+                }
+            }
+        }
+
+        let multiplicand: Int
+        let multiplier: Int
+        let modifier: Int
+        let operation: Operation
+
+        var answer: Int {
+            let product = multiplicand * multiplier
+            switch operation {
+            case .add:
+                return product + modifier
+            case .subtract:
+                return product - modifier
+            }
+        }
+
+        var expression: String {
+            "\(multiplicand) × \(multiplier) \(operation.symbol) \(modifier) = ?"
+        }
+
+        static func random() -> Challenge {
+            let multiplicand = Int.random(in: 2...9)
+            let multiplier = Int.random(in: 2...9)
+            let product = multiplicand * multiplier
+            let operation: Operation = Bool.random() ? .add : .subtract
+            let modifierUpperBound = operation == .subtract ? min(9, product) : 9
+            let modifier = Int.random(in: 1...modifierUpperBound)
+
+            return Challenge(
+                multiplicand: multiplicand,
+                multiplier: multiplier,
+                modifier: modifier,
+                operation: operation
+            )
+        }
+    }
+
     @Binding var isPresented: Bool
     let language: AppLanguage
     var onSuccess: () -> Void
     
-    @State private var num1 = Int.random(in: 1...5)
-    @State private var num2 = Int.random(in: 1...5)
+    @State private var challenge = Challenge.random()
     @State private var answer = ""
     @State private var showError = false
     @State private var scale: CGFloat = 0.8
@@ -2126,7 +3303,7 @@ struct ParentalGateView: View {
                     
                     Button(confirmText) {
                         let input = answer.trimmingCharacters(in: .whitespacesAndNewlines)
-                        if Int(input) == (num1 + num2) {
+                        if Int(input) == challenge.answer {
                             withAnimation(.spring(response: 0.3)) {
                                 onSuccess()
                                 isPresented = false
@@ -2173,11 +3350,11 @@ struct ParentalGateView: View {
     private var questionText: String {
         switch language {
         case .chinese:
-            return "請回答：\(num1) + \(num2) = ?"
+            return "請回答：\(challenge.expression)"
         case .english:
-            return "Please answer: \(num1) + \(num2) = ?"
+            return "Please answer: \(challenge.expression)"
         case .japanese:
-            return "こたえてね：\(num1) + \(num2) = ?"
+            return "こたえてね：\(challenge.expression)"
         }
     }
 
@@ -2377,17 +3554,60 @@ struct LoadingCoverView: View {
 
 struct ThinkingAnimationView: View {
     let language: AppLanguage
+    let stage: AssistantWaitingStage
+    let progress: Double
+    let isPad: Bool
     @State private var isAnimating = false
+
     var body: some View {
         let localizedText = LocalizedStrings(language: language)
-        VStack(spacing: 15) {
+        let clampedProgress = min(max(progress, stage.progressFloor), 1.0)
+        VStack(spacing: isPad ? 16 : 14) {
             HStack(spacing: 8) {
                 ForEach(0..<3) { index in
-                    Circle().fill(Color.MagicBlue.opacity(0.6)).frame(width: 12, height: 12).scaleEffect(isAnimating ? 1.0 : 0.5).opacity(isAnimating ? 1.0 : 0.3).animation(Animation.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.2), value: isAnimating)
+                    Circle()
+                        .fill(Color.MagicBlue.opacity(0.6))
+                        .frame(width: isPad ? 13 : 12, height: isPad ? 13 : 12)
+                        .scaleEffect(isAnimating ? 1.0 : 0.5)
+                        .opacity(isAnimating ? 1.0 : 0.3)
+                        .animation(
+                            Animation.easeInOut(duration: 0.6).repeatForever().delay(Double(index) * 0.2),
+                            value: isAnimating
+                        )
                 }
             }
-            Text(localizedText.thinkingText).font(.system(size: 16, weight: .bold, design: .rounded)).foregroundColor(.gray.opacity(0.8))
-        }.onAppear { isAnimating = true }
+
+            VStack(spacing: 6) {
+                Text(localizedText.waitingTitle(for: stage))
+                    .font(.system(size: isPad ? 18 : 16, weight: .bold, design: .rounded))
+                    .foregroundColor(.DarkText)
+                    .multilineTextAlignment(.center)
+
+                Text(localizedText.waitingSubtitle(for: stage))
+                    .font(.system(size: isPad ? 14 : 12, weight: .medium, design: .rounded))
+                    .foregroundColor(.gray.opacity(0.8))
+                    .multilineTextAlignment(.center)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.85)
+            }
+
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    Capsule()
+                        .fill(Color.MagicBlue.opacity(0.12))
+
+                    Capsule()
+                        .fill(Color.MagicBlue.opacity(0.55))
+                        .frame(width: max(18, geo.size.width * clampedProgress))
+                }
+            }
+            .frame(width: isPad ? 240 : 190, height: 8)
+        }
+        .padding(.vertical, isPad ? 16 : 12)
+        .padding(.horizontal, isPad ? 22 : 18)
+        .onAppear {
+            isAnimating = true
+        }
     }
 }
 
@@ -2412,6 +3632,94 @@ extension Color {
 }
 
 extension String {
+    func limitedForSpokenResponse(language: AppLanguage, answerDepth: AIAnswerDepth = .standard) -> String {
+        let maxSpokenCharacters = answerDepth.spokenCharacterLimit(language: language)
+        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.estimatedTTSCharacterCount(language: language) > maxSpokenCharacters else {
+            return trimmed
+        }
+
+        let sentences = trimmed.splitIntoSpeechSentences()
+        var selected: [String] = []
+
+        for sentence in sentences {
+            let candidate = (selected + [sentence]).joined(separator: "\n\n")
+            if candidate.estimatedTTSCharacterCount(language: language) <= maxSpokenCharacters {
+                selected.append(sentence)
+            } else {
+                break
+            }
+        }
+
+        if !selected.isEmpty {
+            print("✂️ TTS 文字過長，已縮短到 \(selected.joined(separator: "\n\n").estimatedTTSCharacterCount(language: language)) 字")
+            return selected.joined(separator: "\n\n")
+        }
+
+        var fallback = ""
+        for character in trimmed {
+            let candidate = fallback + String(character)
+            guard candidate.estimatedTTSCharacterCount(language: language) <= maxSpokenCharacters else { break }
+            fallback = candidate
+        }
+
+        let result = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
+        print("✂️ TTS 文字過長，已截短到 \(result.estimatedTTSCharacterCount(language: language)) 字")
+        return result.isEmpty ? trimmed : result
+    }
+
+    private func estimatedTTSCharacterCount(language: AppLanguage) -> Int {
+        var text = self
+        text = text.replacingOccurrences(of: "**", with: "")
+        text = text.replacingOccurrences(of: "#", with: "")
+        text = text.replacingOccurrences(of: "`", with: "")
+
+        if language == .japanese {
+            if let rubyRegex = try? NSRegularExpression(pattern: "<ruby>(.*?)<rt>.*?</rt></ruby>", options: [.dotMatchesLineSeparators, .caseInsensitive]) {
+                let range = NSRange(text.startIndex..., in: text)
+                text = rubyRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+            }
+            if let parentheticalKanaRegex = try? NSRegularExpression(pattern: "[\\(（][ぁ-んァ-ヴー]+[\\)）]", options: []) {
+                let range = NSRange(text.startIndex..., in: text)
+                text = parentheticalKanaRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+            }
+            text = text.replacingOccurrences(of: "<ruby>", with: "")
+            text = text.replacingOccurrences(of: "</ruby>", with: "")
+            text = text.replacingOccurrences(of: "<rt>", with: "")
+            text = text.replacingOccurrences(of: "</rt>", with: "")
+        }
+
+        text = text.unicodeScalars
+            .filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }
+            .map { String($0) }
+            .joined()
+        return text.filter { !$0.isWhitespace }.count
+    }
+
+    private func splitIntoSpeechSentences() -> [String] {
+        var sentences: [String] = []
+        var current = ""
+        let terminators = Set<Character>(["。", "！", "？", ".", "!", "?"])
+
+        for character in self {
+            current.append(character)
+            if terminators.contains(character) {
+                let sentence = current.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !sentence.isEmpty {
+                    sentences.append(sentence)
+                }
+                current = ""
+            }
+        }
+
+        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !tail.isEmpty {
+            sentences.append(tail)
+        }
+
+        return sentences
+    }
+
     func toBopomofoCharacter() -> [(char: String, bopomofo: String)] {
         var result: [(String, String)] = []
         for char in self {
@@ -2471,7 +3779,7 @@ extension String {
             // 例如：最初(さいしょ) → 最初
             do {
                 // 匹配括號和裡面的平假名、片假名
-                let regex = try NSRegularExpression(pattern: "\\([ぁ-んァ-ヴー]+\\)", options: [])
+                let regex = try NSRegularExpression(pattern: "[\\(（][ぁ-んァ-ヴー]+[\\)）]", options: [])
                 let range = NSRange(text.startIndex..., in: text)
                 text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
                 print("🇯🇵 移除振假名括號後：\(text)")
@@ -2498,14 +3806,144 @@ extension String {
             }
             
             print("🇯🇵 日文 TTS 最終文字：\(text)")
+        } else if language == .chinese {
+            text = text.removingEmojiPresentationCharacters()
+            text = text.normalizedChineseTTSPunctuation()
+            text = text.normalizedTaiwanMandarinDigitsForTTS()
         } else {
-            // 中文和英文：先移除 Emoji，再處理換行
-            text = text.unicodeScalars.filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }.reduce("") { $0 + String($1) }
-            text = text.replacingOccurrences(of: "\n", with: "，")
+            text = text.removingEmojiPresentationCharacters()
+            text = text.replacingOccurrences(of: "\r\n", with: "\n")
+            text = text.replacingOccurrences(of: "\r", with: "\n")
+            text = text.replacingOccurrences(of: "\n", with: ". ")
+            text = text.collapsingRepeatedSpaces()
         }
+
+        text = text.normalizedForLowArtifactTTS(language: language)
         
         let result = text.trimmingCharacters(in: .whitespacesAndNewlines)
         print("✅ TTS 最終輸入（長度 \(result.count)）：\(result)")
         return result
+    }
+
+    private func removingEmojiPresentationCharacters() -> String {
+        unicodeScalars
+            .filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }
+            .map { String($0) }
+            .joined()
+    }
+
+    private func normalizedChineseTTSPunctuation() -> String {
+        var text = self
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+
+        if let newlineRegex = try? NSRegularExpression(pattern: "\\s*\\n+\\s*", options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = newlineRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "。 ")
+        }
+
+        let cleanupPairs = [
+            ("。。", "。"),
+            ("。，", "。"),
+            ("，。", "。"),
+            ("，，", "，"),
+            ("！。", "！"),
+            ("？。", "？")
+        ]
+
+        for pair in cleanupPairs {
+            while text.contains(pair.0) {
+                text = text.replacingOccurrences(of: pair.0, with: pair.1)
+            }
+        }
+
+        for mark in ["。", "！", "？"] {
+            text = text.replacingOccurrences(of: mark, with: "\(mark) ")
+        }
+
+        return text.collapsingRepeatedSpaces()
+    }
+
+    private func normalizedTaiwanMandarinDigitsForTTS() -> String {
+        var text = self
+
+        if let digitSequenceRegex = try? NSRegularExpression(pattern: "[0-9０-９]+", options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            let matches = digitSequenceRegex.matches(in: text, options: [], range: range).reversed()
+
+            for match in matches {
+                guard let textRange = Range(match.range, in: text) else { continue }
+                let digits = String(text[textRange])
+                let spokenDigits = digits.map { String.taiwanMandarinDigitName(for: $0) }.joined()
+                text.replaceSubrange(textRange, with: spokenDigits)
+            }
+        }
+
+        return text
+    }
+
+    private static func taiwanMandarinDigitName(for character: Character) -> String {
+        switch character {
+        case "0", "０": return "零"
+        case "1", "１": return "一"
+        case "2", "２": return "二"
+        case "3", "３": return "三"
+        case "4", "４": return "四"
+        case "5", "５": return "五"
+        case "6", "６": return "六"
+        case "7", "７": return "七"
+        case "8", "８": return "八"
+        case "9", "９": return "九"
+        default: return String(character)
+        }
+    }
+
+    private func normalizedForLowArtifactTTS(language: AppLanguage) -> String {
+        var text = self
+        let sentenceBreak = language == .english ? ". " : "。 "
+
+        text = text.replacingOccurrences(of: "…", with: sentenceBreak)
+        text = text.replacingOccurrences(of: "...", with: sentenceBreak)
+        text = text.replacingOccurrences(of: "——", with: " ")
+        text = text.replacingOccurrences(of: "—", with: " ")
+        text = text.replacingOccurrences(of: "　", with: " ")
+        text = text.replacingOccurrences(of: "\t", with: " ")
+        text = text.replacingOccurrences(of: "•", with: " ")
+        text = text.replacingOccurrences(of: "●", with: " ")
+        text = text.replacingOccurrences(of: "◆", with: " ")
+        text = text.replacingOccurrences(of: "★", with: " ")
+
+        let cleanupPairs = [
+            ("!!", "!"),
+            ("??", "?"),
+            ("！！", "！"),
+            ("？？", "？"),
+            ("。。", "。"),
+            ("，，", "，"),
+            ("..", "."),
+            (",,", ","),
+            ("。 .", "。"),
+            (". 。", "."),
+            ("! 。", "!"),
+            ("? 。", "?"),
+            ("！ 。", "！"),
+            ("？ 。", "？")
+        ]
+
+        for pair in cleanupPairs {
+            while text.contains(pair.0) {
+                text = text.replacingOccurrences(of: pair.0, with: pair.1)
+            }
+        }
+
+        return text.collapsingRepeatedSpaces()
+    }
+
+    private func collapsingRepeatedSpaces() -> String {
+        var text = self
+        while text.contains("  ") {
+            text = text.replacingOccurrences(of: "  ", with: " ")
+        }
+        return text
     }
 }

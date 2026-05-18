@@ -27,7 +27,8 @@
 We adopt a **"No Personal Data"** policy:
 
 * **No PII Collected:** We do not collect, store, or share any Personally Identifiable Information (PII) such as names, physical addresses, phone numbers, or email addresses from children.
-* **Local Storage:** All chat history, interaction logs, and "Growth Journey" records are stored **locally on your device**. We do not have access to this data. Deleting the App will permanently remove this data.
+* **Local Storage:** Chat history, interaction logs, and "Growth Journey" records are stored locally on your device by default. We do not have access to this data. Deleting the App will permanently remove this data from that device.
+* **Optional iCloud Sync for Subscribers:** If a paid subscription is verified, the App may sync language preference and chat history through Apple's iCloud key-value storage so the same Apple ID can use them across iPhone and iPad. This sync is handled by Apple iCloud; we do not operate a separate server copy of this data.
 
 #### 2. Usage of AI Features (Voice & Images)
 
@@ -76,7 +77,8 @@ By downloading or using this App, you agree to the terms of the **Apple Standard
 我們採取**「不收集個人資料」**的原則：
 
 * **不收集個資：** 我們「不會」收集兒童或家長的任何個人識別資料（如姓名、地址、電話號碼或 Email）。
-* **本機儲存：** 所有的對話紀錄、互動日誌及「成長足跡」資料，皆僅儲存在您的本機裝置中。開發者無法存取這些資料。若您刪除本應用程式，這些紀錄將一併被永久刪除。
+* **本機儲存：** 對話紀錄、互動日誌及「成長足跡」資料預設儲存在您的本機裝置中。開發者無法存取這些資料。若您刪除本應用程式，這些紀錄將從該裝置一併被永久刪除。
+* **訂閱者 iCloud 同步：** 若系統已驗證付費訂閱，本應用程式可透過 Apple iCloud Key-Value Storage 同步語言偏好與對話歷史，讓同一 Apple ID 在 iPhone 與 iPad 間延續使用。同步由 Apple iCloud 處理；我們不會另外在自有伺服器保存這份同步資料。
 
 #### 2. AI 技術與功能使用 (語音與影像)
 
@@ -125,7 +127,8 @@ By downloading or using this App, you agree to the terms of the **Apple Standard
 当方は**「個人データを収集しない」**方針を採用しています：
 
 * **個人情報の非収集：** 当方は、子供や保護者のいかなる個人識別情報（名前、住所、電話番号、メールアドレスなど）も収集、保存、共有することはありません。
-* **ローカル保存：** チャット履歴、対話ログ、「成長の記録（Growth Journey）」データはすべて、**お客様のデバイス内にのみ**保存されます。開発者がこれらのデータにアクセスすることはできません。アプリを削除すると、これらのデータも永久に削除されます。
+* **ローカル保存：** チャット履歴、対話ログ、「成長の記録（Growth Journey）」データは標準ではお客様のデバイス内に保存されます。開発者がこれらのデータにアクセスすることはできません。アプリを削除すると、そのデバイス上のデータも永久に削除されます。
+* **登録者向け iCloud 同期：** 有料登録が確認された場合、本アプリは Apple の iCloud Key-Value Storage を使って言語設定とチャット履歴を同期し、同じ Apple ID の iPhone と iPad で継続して利用できるようにすることがあります。この同期は Apple iCloud により処理され、当方が別途サーバー上に同期データを保存することはありません。
 
 #### 2. AI機能の利用（音声と画像）
 

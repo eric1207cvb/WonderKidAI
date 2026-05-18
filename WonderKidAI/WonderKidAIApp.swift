@@ -7,8 +7,17 @@ struct WonderKidAIApp: App {
     
     init() {
         // --- 1. 初始化 RevenueCat (依照你的要求，Key 寫死在這裡) ---
+        #if DEBUG
         Purchases.logLevel = .debug
-        Purchases.configure(withAPIKey: "appl_NSAHxRGGvIsicrSoplahHXZwhen")
+        #else
+        Purchases.logLevel = .warn
+        #endif
+
+        let configuration = Configuration
+            .builder(withAPIKey: "appl_NSAHxRGGvIsicrSoplahHXZwhen")
+            .with(entitlementVerificationMode: .informational)
+            .build()
+        Purchases.configure(with: configuration)
         
         // 🔥 2. [關鍵修正] 強制 SubscriptionManager 立即檢查一次狀態
         // 這樣 ContentView 才能馬上知道使用者是不是 VIP
