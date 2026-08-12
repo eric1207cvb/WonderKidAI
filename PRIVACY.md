@@ -1,4 +1,4 @@
-# WonderKidAI Privacy Policy
+# Teacher An-An’s Voice Encyclopedia Privacy Policy
 
 **Last updated:** August 12, 2026
 
