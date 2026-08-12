@@ -28,6 +28,12 @@ struct HistoryView: View {
                             } else {
                                 summaryStrip(text: text, isPad: isPad)
 
+                                ParentGrowthDashboard(
+                                    insights: ParentGrowthInsights(history: manager.history),
+                                    text: text,
+                                    isPad: isPad
+                                )
+
                                 LazyVStack(spacing: isPad ? 16 : 12) {
                                     ForEach(manager.history) { item in
                                         HistoryRecordCard(
@@ -257,6 +263,218 @@ struct HistoryView: View {
     }
 }
 
+// MARK: - Parent growth dashboard
+
+private enum CuriosityTopic: CaseIterable, Identifiable {
+    case nature, world, language, numbers
+
+    var id: Self { self }
+
+    func title(for language: AppLanguage) -> String {
+        switch (self, language) {
+        case (.nature, .chinese): return "自然"
+        case (.world, .chinese): return "世界"
+        case (.language, .chinese): return "語言"
+        case (.numbers, .chinese): return "數字"
+        case (.nature, .english): return "Nature"
+        case (.world, .english): return "World"
+        case (.language, .english): return "Language"
+        case (.numbers, .english): return "Numbers"
+        case (.nature, .japanese): return "自然"
+        case (.world, .japanese): return "世界"
+        case (.language, .japanese): return "ことば"
+        case (.numbers, .japanese): return "数"
+        }
+    }
+
+    var icon: String {
+        switch self {
+        case .nature: return "leaf.fill"
+        case .world: return "globe.asia.australia.fill"
+        case .language: return "text.book.closed.fill"
+        case .numbers: return "number.circle.fill"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .nature: return .green
+        case .world: return .MagicBlue
+        case .language: return .purple
+        case .numbers: return .ButtonOrange
+        }
+    }
+}
+
+private struct ParentGrowthInsights {
+    let history: [HistoryItem]
+
+    var recentWeek: [HistoryItem] {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -6, to: Calendar.current.startOfDay(for: Date())) ?? Date()
+        return history.filter { $0.date >= cutoff }
+    }
+
+    var recentQuestions: [HistoryItem] { Array(recentWeek.prefix(3)) }
+
+    var topicCounts: [CuriosityTopic: Int] {
+        var counts = Dictionary(uniqueKeysWithValues: CuriosityTopic.allCases.map { ($0, 0) })
+        for item in recentWeek {
+            counts[classify(item.question)]! += 1
+        }
+        return counts
+    }
+
+    var topTopics: [CuriosityTopic] {
+        CuriosityTopic.allCases.sorted { topicCounts[$0, default: 0] > topicCounts[$1, default: 0] }
+            .filter { topicCounts[$0, default: 0] > 0 }
+    }
+
+    var activeTopicCount: Int { topicCounts.values.filter { $0 > 0 }.count }
+
+    var learningStreak: Int {
+        let calendar = Calendar.current
+        let days = Set(history.map { calendar.startOfDay(for: $0.date) })
+        var streak = 0
+        var cursor = calendar.startOfDay(for: Date())
+        if !days.contains(cursor), let yesterday = calendar.date(byAdding: .day, value: -1, to: cursor) {
+            cursor = yesterday
+        }
+        while days.contains(cursor) {
+            streak += 1
+            guard let previous = calendar.date(byAdding: .day, value: -1, to: cursor) else { break }
+            cursor = previous
+        }
+        return streak
+    }
+
+    private func classify(_ question: String) -> CuriosityTopic {
+        let value = question.lowercased()
+        let match: (CuriosityTopic, [String]) -> Bool = { topic, words in
+            words.contains { value.localizedCaseInsensitiveContains($0) }
+        }
+        if match(.numbers, ["數", "數字", "加", "減", "算", "number", "math", "count", "数字", "数", "計算"]) { return .numbers }
+        if match(.language, ["字", "說", "語", "英文", "日文", "language", "word", "read", "文字", "言葉", "ことば", "漢字"]) { return .language }
+        if match(.world, ["國", "城市", "地圖", "地球", "宇宙", "歷史", "world", "country", "space", "city", "日本", "世界", "宇宙", "地理", "歴史"]) { return .world }
+        return .nature
+    }
+}
+
+private struct ParentGrowthDashboard: View {
+    let insights: ParentGrowthInsights
+    let text: HistoryCopy
+    let isPad: Bool
+
+    var body: some View {
+        VStack(spacing: isPad ? 16 : 12) {
+            weeklySummary
+            curiosityMap
+            milestones
+        }
+    }
+
+    private var weeklySummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(text.weeklySummaryTitle, systemImage: "calendar.badge.clock")
+                .font(.system(size: isPad ? 18 : 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.MagicBlue)
+
+            Text(text.weeklySummary(count: insights.recentWeek.count, topics: insights.topTopics.prefix(2).map { $0.title(for: text.language) }))
+                .font(.system(size: isPad ? 17 : 15, weight: .semibold, design: .rounded))
+                .foregroundStyle(Color.primary.opacity(0.82))
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !insights.recentQuestions.isEmpty {
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(text.recentQuestionsTitle)
+                        .font(.system(size: isPad ? 13 : 12, weight: .bold, design: .rounded))
+                        .foregroundStyle(.secondary)
+                    ForEach(insights.recentQuestions) { item in
+                        HStack(alignment: .top, spacing: 8) {
+                            Image(systemName: "quote.bubble.fill").foregroundStyle(Color.MagicBlue.opacity(0.72))
+                            Text(item.question)
+                                .font(.system(size: isPad ? 15 : 14, weight: .medium, design: .rounded))
+                                .foregroundStyle(.primary)
+                                .lineLimit(2)
+                        }
+                    }
+                }
+                .padding(12)
+                .background(Color.MagicBlue.opacity(0.07), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+            }
+        }
+        .padding(isPad ? 18 : 15)
+        .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var curiosityMap: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(text.curiosityMapTitle, systemImage: "map.fill")
+                .font(.system(size: isPad ? 18 : 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(.purple)
+            Text(text.curiosityMapSubtitle)
+                .font(.system(size: isPad ? 14 : 12, weight: .medium, design: .rounded))
+                .foregroundStyle(.secondary)
+
+            ForEach(CuriosityTopic.allCases) { topic in
+                let count = insights.topicCounts[topic, default: 0]
+                HStack(spacing: 10) {
+                    Image(systemName: topic.icon).foregroundStyle(topic.color).frame(width: 20)
+                    Text(topic.title(for: text.language)).font(.system(size: isPad ? 15 : 14, weight: .bold, design: .rounded)).frame(width: isPad ? 82 : 66, alignment: .leading)
+                    GeometryReader { geo in
+                        Capsule().fill(topic.color.opacity(0.13))
+                            .overlay(alignment: .leading) {
+                                Capsule().fill(topic.color).frame(width: insights.recentWeek.isEmpty ? 0 : max(5, geo.size.width * CGFloat(count) / CGFloat(max(insights.recentWeek.count, 1))))
+                            }
+                    }
+                    .frame(height: 9)
+                    Text("\(count)").font(.system(size: isPad ? 14 : 13, weight: .heavy, design: .rounded)).foregroundStyle(.secondary).frame(width: 20)
+                }
+            }
+        }
+        .padding(isPad ? 18 : 15)
+        .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+
+    private var milestones: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Label(text.milestoneTitle, systemImage: "medal.fill")
+                .font(.system(size: isPad ? 18 : 16, weight: .heavy, design: .rounded))
+                .foregroundStyle(Color.ButtonOrange)
+            ForEach(text.milestones(total: insights.history.count, streak: insights.learningStreak, topicCount: insights.activeTopicCount), id: \.title) { milestone in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: milestone.reached ? "checkmark.seal.fill" : "circle")
+                        .foregroundStyle(milestone.reached ? Color.green : Color.secondary.opacity(0.42))
+                        .font(.system(size: isPad ? 20 : 18, weight: .semibold))
+                        .padding(.top, 2)
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(milestone.title).font(.system(size: isPad ? 15 : 14, weight: .bold, design: .rounded))
+                            Spacer(minLength: 6)
+                            Text(milestone.progressLabel)
+                                .font(.system(size: isPad ? 13 : 12, weight: .heavy, design: .rounded))
+                                .foregroundStyle(milestone.reached ? Color.green : Color.secondary)
+                        }
+                        Text(milestone.detail).font(.system(size: isPad ? 13 : 12, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+                        GeometryReader { geo in
+                            Capsule()
+                                .fill(Color.secondary.opacity(0.13))
+                                .overlay(alignment: .leading) {
+                                    Capsule()
+                                        .fill(milestone.reached ? Color.green : Color.ButtonOrange)
+                                        .frame(width: max(3, geo.size.width * milestone.progress))
+                                }
+                        }
+                        .frame(height: isPad ? 7 : 6)
+                        .padding(.top, 5)
+                    }
+                }
+            }
+        }
+        .padding(isPad ? 18 : 15)
+        .background(.white.opacity(0.86), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+    }
+}
+
 private struct SummaryChip: View {
     let icon: String
     let title: String
@@ -313,7 +531,7 @@ private struct HistoryRecordCard: View {
                 content: item.question,
                 itemLanguage: itemLanguage,
                 isAnswer: false,
-                isExpanded: true,
+                isExpanded: isExpanded,
                 isPad: isPad
             )
 
@@ -467,22 +685,26 @@ private struct PromptBlock: View {
                     .foregroundColor(color)
             }
 
-            if isAnswer && itemLanguage == .japanese {
-                FuriganaText(
-                    content,
-                    fontSize: bodyFontSize,
-                    fontWeight: bodyFontWeight,
-                    textColor: bodyTextColor,
-                    lineSpacing: bodyLineSpacing
+            if isAnswer && !isExpanded {
+                Label(textPreviewLabel, systemImage: "text.justify")
+                    .font(.system(size: isPad ? 14 : 12, weight: .semibold, design: .rounded))
+                    .foregroundStyle(color.opacity(0.78))
+                    .padding(.vertical, isPad ? 3 : 1)
+            } else if isAnswer && itemLanguage == .japanese {
+                // The growth record is a parent-facing reading surface, not
+                // the child's karaoke card. Present clean Japanese prose here
+                // so ruby annotations do not spread every character apart.
+                HistoryJapaneseAnswerText(
+                    content: content,
+                    isExpanded: isExpanded,
+                    isPad: isPad
                 )
-                .lineLimit(isExpanded ? nil : 4)
-                .fixedSize(horizontal: false, vertical: true)
             } else {
                 Text(content)
                     .font(.system(size: bodyFontSize, weight: bodyFontWeight, design: .rounded))
                     .foregroundColor(bodyTextColor)
                     .lineSpacing(bodyLineSpacing)
-                    .lineLimit(isAnswer && !isExpanded ? 4 : nil)
+                    .lineLimit(!isExpanded ? 2 : nil)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -490,10 +712,154 @@ private struct PromptBlock: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(color.opacity(isAnswer ? 0.07 : 0.09), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
     }
+
+    private var textPreviewLabel: String {
+        switch itemLanguage {
+        case .chinese: return "點開查看老師的完整回答"
+        case .english: return "Open to read Teacher An-An’s answer"
+        case .japanese: return "開くと先生の答えが読めます"
+        }
+    }
+}
+
+/// Parent-friendly Japanese typography used only in the growth record.
+/// The interactive learning screen retains its full ruby karaoke treatment.
+private struct HistoryJapaneseAnswerText: View {
+    let content: String
+    let isExpanded: Bool
+    let isPad: Bool
+
+    private var readableContent: String {
+        var text = content
+
+        if let rubyRegex = try? NSRegularExpression(
+            pattern: #"<ruby>(.*?)<rt>.*?</rt></ruby>"#,
+            options: [.dotMatchesLineSeparators, .caseInsensitive]
+        ) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = rubyRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+        }
+
+        if let readingRegex = try? NSRegularExpression(
+            pattern: #"[\(（][ぁ-んァ-ヴー\s]+[\)）]"#,
+            options: []
+        ) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = readingRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
+        }
+
+        return text
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    var body: some View {
+        Text(readableContent)
+            .font(.system(size: isPad ? 18 : 17, weight: .regular, design: .rounded))
+            .foregroundStyle(Color.primary.opacity(0.82))
+            .lineSpacing(isPad ? 9 : 8)
+            .lineLimit(isExpanded ? nil : 5)
+            .multilineTextAlignment(.leading)
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.top, 2)
+    }
 }
 
 private struct HistoryCopy {
     let language: AppLanguage
+
+    struct Milestone: Hashable {
+        let title: String
+        let detail: String
+        let current: Int
+        let target: Int
+
+        var reached: Bool { current >= target }
+        var progress: CGFloat { min(1, CGFloat(current) / CGFloat(max(target, 1))) }
+        var progressLabel: String { "\(min(current, target)) / \(target)" }
+    }
+
+    var weeklySummaryTitle: String {
+        switch language {
+        case .chinese: return "本週學習摘要"
+        case .english: return "This Week’s Learning"
+        case .japanese: return "今週の学び"
+        }
+    }
+
+    var recentQuestionsTitle: String {
+        switch language {
+        case .chinese: return "孩子最近問的問題"
+        case .english: return "Recent questions"
+        case .japanese: return "最近の質問"
+        }
+    }
+
+    var curiosityMapTitle: String {
+        switch language {
+        case .chinese: return "好奇心地圖"
+        case .english: return "Curiosity Map"
+        case .japanese: return "好奇心マップ"
+        }
+    }
+
+    var curiosityMapSubtitle: String {
+        switch language {
+        case .chinese: return "依最近 7 天的提問整理；數字越高，代表探索越多。"
+        case .english: return "Based on questions from the past 7 days. Higher counts mean more exploration."
+        case .japanese: return "最近 7 日間の質問から整理しました。数字が多いほど、よく探究したテーマです。"
+        }
+    }
+
+    var milestoneTitle: String {
+        switch language {
+        case .chinese: return "溫柔的成長里程碑"
+        case .english: return "Gentle Growth Milestones"
+        case .japanese: return "小さな成長のしるし"
+        }
+    }
+
+    func weeklySummary(count: Int, topics: [String]) -> String {
+        let topicText: String
+        switch language {
+        case .chinese: topicText = topics.isEmpty ? "還在慢慢發現喜歡的主題" : "最常探索「\(topics.joined(separator: "、"))」"
+        case .english: topicText = topics.isEmpty ? "They are still discovering favorite topics" : "Most explored: \(topics.joined(separator: " and "))"
+        case .japanese: topicText = topics.isEmpty ? "好きなテーマを、これから見つけていくところです" : "よく探究したテーマは「\(topics.joined(separator: "・"))」です"
+        }
+
+        switch language {
+        case .chinese: return "這週一共探索了 \(count) 個問題，\(topicText)。"
+        case .english: return "This week, your child explored \(count) questions. \(topicText)."
+        case .japanese: return "今週は \(count) 個の質問を探究しました。\(topicText)"
+        }
+    }
+
+    func milestones(total: Int, streak: Int, topicCount: Int) -> [Milestone] {
+        switch language {
+        case .chinese:
+            return [
+                .init(title: "好奇心起步", detail: total > 0 ? "已留下第一個問題" : "問出第一個問題就能解鎖", current: total, target: 1),
+                .init(title: "持續探索", detail: streak >= 3 ? "已連續探索 \(streak) 天" : "連續探索 3 天即可達成", current: streak, target: 3),
+                .init(title: "多元發現", detail: topicCount >= 3 ? "本週探索了 \(topicCount) 種主題" : "本週探索 3 種主題即可達成", current: topicCount, target: 3),
+                .init(title: "小小研究家", detail: total >= 100 ? "已累積 \(total) 個問題" : "累積 100 個問題即可達成", current: total, target: 100)
+            ]
+        case .english:
+            return [
+                .init(title: "Curiosity Begins", detail: total > 0 ? "First question saved" : "Ask a first question to unlock", current: total, target: 1),
+                .init(title: "Keep Exploring", detail: streak >= 3 ? "Explored for \(streak) days in a row" : "Explore for 3 days in a row", current: streak, target: 3),
+                .init(title: "Many Discoveries", detail: topicCount >= 3 ? "Explored \(topicCount) topic areas this week" : "Explore 3 topic areas this week", current: topicCount, target: 3),
+                .init(title: "Little Researcher", detail: total >= 100 ? "Collected \(total) questions" : "Collect 100 questions", current: total, target: 100)
+            ]
+        case .japanese:
+            return [
+                .init(title: "好奇心のはじまり", detail: total > 0 ? "はじめての質問を記録しました" : "はじめての質問で達成", current: total, target: 1),
+                .init(title: "つづけて探究", detail: streak >= 3 ? "\(streak) 日つづけて探究しました" : "3 日つづけて探究すると達成", current: streak, target: 3),
+                .init(title: "いろいろ発見", detail: topicCount >= 3 ? "今週は \(topicCount) 種類のテーマを探究しました" : "今週 3 種類のテーマを探究すると達成", current: topicCount, target: 3),
+                .init(title: "小さな研究者", detail: total >= 100 ? "\(total) 個の質問を集めました" : "100 個の質問で達成", current: total, target: 100)
+            ]
+        }
+    }
 
     var title: String {
         switch language {

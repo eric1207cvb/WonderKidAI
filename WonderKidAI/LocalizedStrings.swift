@@ -178,6 +178,14 @@ struct LocalizedStrings {
         case .japanese: return "🤔 声(こえ)が小(ちい)さいかも〜"
         }
     }
+
+    var errorSpeechUnavailable: String {
+        switch language {
+        case .chinese: return "🎙️ 聽不清楚，請再說一次～"
+        case .english: return "🎙️ I couldn’t hear that. Please try again~"
+        case .japanese: return "🎙️ うまく聞(き)こえなかったよ。もう一度(いちど)話(はな)してね〜"
+        }
+    }
     
     var errorNetwork: String {
         switch language {
@@ -551,8 +559,8 @@ struct LocalizedStrings {
         case .japanese:
             switch stage {
             case .craftingAnswer: return "あんあん先生、答(こた)えを考(かんが)え中(ちゅう)"
-            case .generatingVoice: return "あんあん先生、答(こた)えを声(こえ)にしているよ"
-            case .preparingPlayback: return "あんあん先生、音(おと)をならす準備(じゅんび)をしているよ"
+            case .generatingVoice: return "声(こえ)を作(つく)っているよ"
+            case .preparingPlayback: return "もうすぐ聞(き)けるよ"
             }
         }
     }
@@ -574,8 +582,8 @@ struct LocalizedStrings {
         case .japanese:
             switch stage {
             case .craftingAnswer: return "わかりやすく伝(つた)えるために、やさしくまとめているよ。"
-            case .generatingVoice: return "さっきの答(こた)えを、やさしい声(こえ)にしているところだよ。"
-            case .preparingPlayback: return "音(おと)と字幕(じまく)をそろえて、すぐに再生(さいせい)するよ。"
+            case .generatingVoice: return "答(こた)えを、やさしい声(こえ)にしているよ。"
+            case .preparingPlayback: return "声(こえ)と字幕(じまく)をそろえているよ。"
             }
         }
     }
