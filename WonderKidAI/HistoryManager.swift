@@ -50,13 +50,14 @@ class HistoryManager: ObservableObject {
     
     // 刪除紀錄 (支援滑動刪除)
     func deleteRecord(at offsets: IndexSet) {
-        let deletedIDs = offsets.compactMap { index -> UUID? in
-            guard history.indices.contains(index) else { return nil }
-            return history[index].id
-        }
+        // SwiftUI 的刪除事件可能在資料已被同步更新後才送達；只處理仍有效的索引，
+        // 避免把過期的 IndexSet 傳給 remove(atOffsets:) 而越界。
+        let validOffsets = IndexSet(offsets.filter { history.indices.contains($0) })
+        guard !validOffsets.isEmpty else { return }
 
-        // 這行程式碼需要 import SwiftUI 才能運作
-        history.remove(atOffsets: offsets)
+        let deletedIDs = validOffsets.map { history[$0].id }
+
+        history.remove(atOffsets: validOffsets)
         saveHistory()
         deletedIDs.forEach {
             PremiumCloudSyncManager.shared.historyRecordDidDelete($0, remainingHistory: history)
@@ -81,10 +82,15 @@ class HistoryManager: ObservableObject {
 
     @discardableResult
     func applyCloudHistory(_ cloudHistory: [HistoryItem], deletedRecordIDs: Set<UUID>, clearedAt: Date?) -> Bool {
-        var mergedByID = Dictionary(uniqueKeysWithValues: history.map { ($0.id, $0) })
-
-        for item in cloudHistory {
-            mergedByID[item.id] = PromptVisibilitySanitizer.sanitizedHistoryItem(item)
+        // 不信任持久化或 iCloud payload 中的 UUID 唯一性。Dictionary(uniqueKeysWithValues:)
+        // 遇到重複 key 會直接觸發 runtime trap，因此保留日期較新的那筆即可。
+        var mergedByID: [UUID: HistoryItem] = [:]
+        for item in history + cloudHistory {
+            let sanitized = PromptVisibilitySanitizer.sanitizedHistoryItem(item)
+            if let existing = mergedByID[sanitized.id], existing.date >= sanitized.date {
+                continue
+            }
+            mergedByID[sanitized.id] = sanitized
         }
 
         var merged = Array(mergedByID.values)
@@ -122,15 +128,29 @@ class HistoryManager: ObservableObject {
     private func loadHistory() {
         if let data = UserDefaults.standard.data(forKey: key),
            let decoded = try? JSONDecoder().decode([HistoryItem].self, from: data) {
-            // 確保排序是新的在前面
-            let sanitized = decoded
-                .map { PromptVisibilitySanitizer.sanitizedHistoryItem($0) }
-                .sorted(by: { $0.date > $1.date })
-            history = sanitized
-            if sanitized != decoded {
+            // 避免損毀資料、重複 UUID 或舊版留下的超量紀錄影響記憶體與同步合併。
+            let normalized = normalizedHistory(decoded)
+            history = normalized
+            if normalized != decoded {
                 saveHistory()
             }
         }
+    }
+
+    private func normalizedHistory(_ items: [HistoryItem]) -> [HistoryItem] {
+        var newestByID: [UUID: HistoryItem] = [:]
+        for rawItem in items {
+            let item = PromptVisibilitySanitizer.sanitizedHistoryItem(rawItem)
+            if let existing = newestByID[item.id], existing.date >= item.date {
+                continue
+            }
+            newestByID[item.id] = item
+        }
+
+        return newestByID.values
+            .sorted(by: { $0.date > $1.date })
+            .prefix(50)
+            .map { $0 }
     }
 }
 

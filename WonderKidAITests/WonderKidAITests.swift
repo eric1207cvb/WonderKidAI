@@ -8,6 +8,7 @@
 import Testing
 @testable import WonderKidAI
 
+@MainActor
 struct WonderKidAITests {
 
     @Test func chineseTTSExpandsDigitSequencesInOrder() async throws {
@@ -23,16 +24,25 @@ struct WonderKidAITests {
         #expect(!cleaned.contains("474"))
     }
 
-    @Test func japaneseTTSRemovesDisplayFuriganaButKeepsKanji() async throws {
+    @Test func japaneseTTSUsesFuriganaForStableKaraokeTiming() async throws {
         let cleaned = "火山(かざん)は自然（しぜん）の力(ちから)です。"
             .cleanForTTS(language: .japanese)
 
-        #expect(cleaned.contains("火山は自然の力です"))
-        #expect(!cleaned.contains("かざん"))
-        #expect(!cleaned.contains("しぜん"))
-        #expect(!cleaned.contains("ちから"))
+        #expect(cleaned.contains("かざんはしぜんのちからです"))
+        #expect(!cleaned.contains("火山"))
+        #expect(!cleaned.contains("自然"))
+        #expect(!cleaned.contains("力"))
         #expect(!cleaned.contains("("))
         #expect(!cleaned.contains("（"))
+    }
+
+    @Test func japaneseKaraokeSplitsPlainKanaPerCharacter() async throws {
+        let view = ContentView()
+        let tokens = view.buildJapaneseKaraokeTokens(for: "こんにちは。火山(かざん)です。")
+
+        #expect(tokens.map(\.text).prefix(4).elementsEqual(["こ", "ん", "に", "ち"]))
+        #expect(tokens.contains(where: { $0.text == "は。" }))
+        #expect(tokens.contains(where: { $0.text == "火山(かざん)" }))
     }
 
     @Test func internalPromptQuestionIsConvertedBackToOriginalQuestion() async throws {

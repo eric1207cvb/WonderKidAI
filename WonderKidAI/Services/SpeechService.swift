@@ -16,10 +16,15 @@ class SpeechService: NSObject {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private var recognitionTask: SFSpeechRecognitionTask?
     private let audioEngine = AVAudioEngine()
+    // Cancelling a recognition task commonly produces a terminal error callback
+    // (Simulator often reports kAFAssistantErrorDomain 216). It is expected
+    // after our own silence/manual stop and must not erase a valid transcript.
+    private var isStoppingRecognition = false
     
     // 回調
     var onSpeechDetected: ((String, Bool) -> Void)?
     var onRecordingStarted: (() -> Void)?
+    var onRecognitionFailed: ((Error) -> Void)?
     
     private var silenceTimer: Timer?
     private let silenceThreshold: TimeInterval = 1.5
@@ -89,6 +94,7 @@ class SpeechService: NSObject {
     
     func startRecording(language: AppLanguage) throws {
         stopRecording() // 先確保之前的清理乾淨
+        isStoppingRecognition = false
         
         // 1. 設定音訊環境
         configureAudioSession(isRecording: true)
@@ -105,7 +111,17 @@ class SpeechService: NSObject {
         let localeID: String
         switch language {
         case .chinese:
+            // Xcode's iOS 26.5 Simulator currently fails to initialise its
+            // zh-TW Siri Understanding asset (kLSRErrorDomain 300), even
+            // after a clean runtime install.  Mandarin speech is mutually
+            // intelligible here, so use the separately delivered zh-CN
+            // recogniser only for Simulator testing.  The shipping app keeps
+            // the Taiwanese recogniser and all UI / AI output remains zh-TW.
+            #if targetEnvironment(simulator)
+            localeID = "zh-CN"
+            #else
             localeID = "zh-TW"
+            #endif
         case .english:
             localeID = "en-US"
         case .japanese:
@@ -121,7 +137,9 @@ class SpeechService: NSObject {
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         guard let recognitionRequest = recognitionRequest else { return }
+        recognitionRequest.taskHint = .dictation
         recognitionRequest.shouldReportPartialResults = true
+        if #available(iOS 16.0, *) { recognitionRequest.addsPunctuation = false }
         
         let inputNode = audioEngine.inputNode
         
@@ -133,29 +151,50 @@ class SpeechService: NSObject {
                 formatToUse = fallbackFormat
             }
         }
+
+        // Notify the UI before creating the recognition task. On Simulator a
+        // broken language asset can fail synchronously while the task is being
+        // created; notifying afterwards would incorrectly overwrite that
+        // failure with a late "recording started" state.
+        DispatchQueue.main.async {
+            self.onRecordingStarted?()
+        }
         
         // 3. 設定辨識任務
         recognitionTask = speechRecognizer?.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             guard let self = self else { return }
-            var isFinal = false
+            var didReceiveFinalResult = false
             
             if let result = result {
-                let text = result.bestTranscription.formattedString
+                let rawText = result.bestTranscription.formattedString
+                // The Simulator fallback recogniser is zh-CN, but WonderKidAI
+                // is a Traditional Chinese app. Convert its transcript before
+                // it ever reaches the UI, history, or AI request. Hans-Hant
+                // is the ICU transform for Simplified → Traditional.
+                let text: String
+                if language == .chinese {
+                    text = rawText.applyingTransform(StringTransform("Hans-Hant"), reverse: false) ?? rawText
+                } else {
+                    text = rawText
+                }
                 // 確保回調在主線程
                 DispatchQueue.main.async {
-                    self.onSpeechDetected?(text, false)
-                    self.resetSilenceTimer()
+                    self.onSpeechDetected?(text, result.isFinal)
+                    if !result.isFinal { self.resetSilenceTimer() }
                 }
-                isFinal = result.isFinal
+                didReceiveFinalResult = result.isFinal
             }
             
             if let error = error {
                 #if DEBUG
                 print("[STT] recognition error: \(error)")
                 #endif
+                if !self.isStoppingRecognition {
+                    DispatchQueue.main.async { self.onRecognitionFailed?(error) }
+                }
             }
             
-            if error != nil || isFinal {
+            if error != nil || didReceiveFinalResult {
                 self.stopRecording()
             }
         }
@@ -169,12 +208,10 @@ class SpeechService: NSObject {
         try audioEngine.start()
         
         print("🎙️ 麥克風已啟動")
-        DispatchQueue.main.async {
-            self.onRecordingStarted?()
-        }
     }
     
     func stopRecording() {
+        isStoppingRecognition = true
         silenceTimer?.invalidate()
         silenceTimer = nil
         

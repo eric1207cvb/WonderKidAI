@@ -74,11 +74,11 @@ enum AIAnswerDepth: String, Sendable {
     func promptInstruction(language: AppLanguage) -> String {
         switch (self, language) {
         case (.standard, .chinese):
-            return "回答請控制在 180 個中文字以內，最多 2 個短段落，適合一次語音播放。"
+            return "先用第一句直接回答孩子的問題。接著用 2 到 3 個短段落補上真正有用的內容：至少包含一個『為什麼』或運作方式，以及一個孩子在生活中看得到的具體例子。回答約 230 到 280 個中文字；每一句都要提供新資訊，不要用『很特別、很有趣、可以多多觀察』這類空泛句子湊字數。適合一次語音播放。"
         case (.standard, .english):
             return "Keep the answer under 80 words, with at most 2 short paragraphs, suitable for one audio playback."
         case (.standard, .japanese):
-            return "答(こた)えは短(みじか)く、音声(おんせい)で一度(いちど)に聞(き)きやすい長(なが)さにしてね。目安(めやす)は 180 字(じ)くらい、短(みじか)い段落(だんらく)は 2 つまでだよ。漢字(かんじ)を使(つか)う時(とき)は、子(こ)どもが読(よ)めるように必(かなら)ず 漢字(ひらがな) の形(かたち)でふりがなを付(つ)けてね。"
+            return "最初(さいしょ)に質問(しつもん)の答(こた)えをはっきり言(い)ってから、理由(りゆう)と身近(みぢか)な例(れい)を足(た)してね。目安(めやす)は 280〜360 字(じ)、2〜3 の短(みじか)い段落(だんらく)で、子(こ)どもが『なるほど』と思(おも)える学(まな)びを入(い)れてね。漢字(かんじ)を使(つか)う時(とき)は、子(こ)どもが読(よ)めるように必(かなら)ず 漢字(ひらがな) の形(かたち)でふりがなを付(つ)けてね。"
         case (.expanded, .chinese):
             return "付費深度模式：請先直接回答孩子問的核心問題，再補充必要原因、例子或常見誤解。內容要更好懂，但不要為了變長而加入無關聯想、延伸故事、冷知識或空泛總結。簡單問題用 2 到 3 個短段落即可；複雜問題最多 4 到 5 個短段落。保持口語、溫柔、適合一次語音播放。"
         case (.expanded, .english):
@@ -90,8 +90,10 @@ enum AIAnswerDepth: String, Sendable {
 
     func chatMaxOutputTokens(language: AppLanguage) -> Int {
         switch (self, language) {
-        case (.standard, .chinese), (.standard, .japanese):
-            return 320
+        case (.standard, .chinese):
+            return 460
+        case (.standard, .japanese):
+            return 500
         case (.standard, .english):
             return 180
         case (.expanded, .chinese), (.expanded, .japanese):
@@ -103,7 +105,9 @@ enum AIAnswerDepth: String, Sendable {
 
     func spokenCharacterLimit(language: AppLanguage) -> Int {
         switch (self, language) {
-        case (.standard, _):
+        case (.standard, .chinese):
+            return 340
+        case (.standard, .english), (.standard, .japanese):
             return 260
         case (.expanded, .english):
             return 1_250
@@ -513,7 +517,7 @@ class OpenAIService {
     // This restores service without a new deployment, but server-side quota/model enforcement is weaker.
     private let allowsLegacyRenderProxyFallback = true
     private static let legacyProxySpeechTicket = "legacy-render-proxy"
-    private let answerCacheVersion = "answer-v5-ja-furigana-display"
+    private let answerCacheVersion = "answer-v6-richer-zh-standard"
     
     static let shared = OpenAIService()
     private let ttsCache = NSCache<NSString, NSData>()
@@ -830,6 +834,9 @@ class OpenAIService {
 
     func generateSpeechAudio(ttsInput: String, language: AppLanguage, speechTicket: String) async throws -> Data {
         let profile = ttsVoiceProfile(for: language)
+        // The reading card and speech must always use the same complete answer.
+        // A long answer naturally takes longer to synthesize and play, but it
+        // must never be silently shortened by the legacy proxy fallback.
         let cacheKey = ttsCacheKey(for: ttsInput, language: language, profile: profile)
 
         if let cached = await cachedAudioIfAvailable(for: ttsInput, language: language) {
@@ -997,7 +1004,7 @@ class OpenAIService {
                 speed: 0.92,
                 responseFormat: "wav",
                 instructions: "\(naturalFemaleStyle) Use natural Japanese pronunciation and rhythm. Avoid anime-style acting or exaggerated cute character voice.",
-                cacheVersion: "natural-female-v1-ja-jp-nova-wav"
+                cacheVersion: "natural-female-v4-ja-ruby-spoken-nova-0.92-wav"
             )
         }
     }
@@ -1227,7 +1234,7 @@ class OpenAIService {
         case .english:
             return "You are Teacher An-An for children aged 4 to 10. Answer gently in simple natural paragraphs suitable for TTS. Do not use Markdown. \(answerDepth.promptInstruction(language: language))"
         case .japanese:
-            return "あなたはあんあん先生です。4〜10歳の子ども向けに、やさしく、音声で聞きやすい自然な文で答えてください。Markdown は使わないでください。漢字を使う時は、表示用に必ず 漢字(ひらがな) の形でふりがなを付けてください。例：火山(かざん)、自然(しぜん)、理由(りゆう)。\(answerDepth.promptInstruction(language: language))"
+            return "あなたはあんあん先生です。4〜10歳の子ども向けに、やさしく、音声で聞きやすい自然な文で答えてください。Markdown は使わないでください。漢字を使う時は、表示用に必ず 漢字(ひらがな) の形でふりがなを付けてください。例：火山(かざん)、自然(しぜん)、理由(りゆう)。日本語の句読点は必ず全角の「、」「。」を自然な位置に使い、各文は「。」で終えてください。「、」「。」「！」「？」の直前に空白を置かず、半角の , . ! ? は使わないでください。\(answerDepth.promptInstruction(language: language))"
         }
     }
     

@@ -43,14 +43,10 @@ enum AssistantWaitingStage: CaseIterable {
     }
 
     var symbolName: String {
-        switch self {
-        case .craftingAnswer:
-            return "book.fill"
-        case .generatingVoice:
-            return "waveform"
-        case .preparingPlayback:
-            return "speaker.wave.2.fill"
-        }
+        // Keep one recognisable assistant-thinking symbol through every
+        // language and processing stage. Copy can explain the stage; the
+        // visual identity should not turn into a book, waveform, or speaker.
+        "brain.head.profile"
     }
 
     var accentColor: Color {
@@ -90,7 +86,8 @@ struct ContentView: View {
     }
 
     private static func hasStoredLanguagePreference() -> Bool {
-        UserDefaults.standard.object(forKey: preferredLanguageKey) != nil
+        guard let rawValue = UserDefaults.standard.string(forKey: preferredLanguageKey) else { return false }
+        return AppLanguage(rawValue: rawValue) != nil
     }
 
     private static func languageMatchingSystem() -> AppLanguage {
@@ -106,9 +103,13 @@ struct ContentView: View {
 
     // MARK: - 系統環境變數
     @Environment(\.scenePhase) var scenePhase
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    private var usesAccessibilityText: Bool { dynamicTypeSize.isAccessibilitySize }
     
     // MARK: - 狀態變數
     @ObservedObject private var subManager = SubscriptionManager.shared
+    @ObservedObject private var historyManager = HistoryManager.shared
     
     @State private var selectedLanguage: AppLanguage = .chinese
     @State private var aiResponse: String = ""
@@ -117,12 +118,8 @@ struct ContentView: View {
     // 預熱標記
     @State private var didPrewarm = false
     
-    // 新增 isLandscape 狀態
-    @State private var isLandscape: Bool = false
-    
-    // 🎬 過場動畫控制
-    @State private var isAppearing: Bool = false
-    @State private var orientationTransitionID: UUID = UUID()
+    @State private var isLaunchReady: Bool = false
+    @State private var didScheduleLaunchReveal: Bool = false
     
     // 初始化語言設定
     init() {
@@ -169,6 +166,7 @@ struct ContentView: View {
     @State private var currentWordIndex: Int = 0
     @State private var currentSentenceIndex: Int = 0
     @State private var isUserScrolling: Bool = false
+    @State private var lastTranscriptScrollAt: Date = .distantPast
     
     // 資料源
     @State private var characterData: [(char: String, bopomofo: String)] = []
@@ -186,27 +184,11 @@ struct ContentView: View {
             // 計算當前佈局方向
             let computedIsLandscape = geometry.size.width > geometry.size.height
             
-            // 當幀大小變化時更新 isLandscape 狀態，使用動畫
+            // Drive layout from the current geometry so rotation never renders
+            // a delayed second layout tree underneath the first one.
             Color.clear
                 .onAppear {
-                    isLandscape = computedIsLandscape
-                    // 🎬 延遲顯示主畫面，創造平滑啟動體驗
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                        withAnimation(.easeOut(duration: 0.3)) {
-                            isAppearing = true
-                        }
-                    }
-                }
-                .onChange(of: geometry.size) { oldSize, newSize in
-                    let newIsLandscape = newSize.width > newSize.height
-                    guard newIsLandscape != isLandscape else { return }
-                    
-                    // 節流：延遲少許再套用，避免旋轉過程中多次觸發重排
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.02) {
-                        withAnimation(.snappy(duration: 0.35, extraBounce: 0.0)) {
-                            isLandscape = newIsLandscape
-                        }
-                    }
+                    scheduleLaunchReveal()
                 }
             
             // iPad Split View 窄寬時改用 phone-sized UI，避免大型元件擠壓。
@@ -215,39 +197,34 @@ struct ContentView: View {
             
             // --- 背景層 (共用) ---
             ZStack {
-                Image("KnowledgeBackground")
-                    .resizable()
-                    .scaledToFill()
-                    .frame(width: geometry.size.width, height: geometry.size.height)
-                    .clipped()
+                Color(uiColor: .systemGroupedBackground)
                     .ignoresSafeArea()
-                    .opacity(isAppearing ? 0.3 : 0)
-                    .zIndex(0)
                 
                 LinearGradient(
-                    gradient: Gradient(colors: [Color.white.opacity(0.85), Color.SoftBlue.opacity(0.6)]),
+                    gradient: Gradient(colors: [Color.accentColor.opacity(0.10), .clear]),
                     startPoint: .top,
-                    endPoint: .bottom
+                    endPoint: .center
                 )
                 .ignoresSafeArea()
                 .zIndex(0)
             }
             
             Group {
-                if isLandscape || isPad {
+                if computedIsLandscape || isPad {
                     // 🟢 橫向模式，以及 iPad regular 寬度：改用雙欄，避免 iPad 直向堆疊過長。
-                    HStack(spacing: 0) {
+                    HStack(spacing: isPad ? 20 : 0) {
                         
                         // 左側欄：視覺動畫 + 麥克風。iPad 直向給閱讀區更多寬度。
-                        let leftColumnRatio: CGFloat = isPad ? (geometry.size.width >= 1024 ? 0.38 : 0.34) : 0.35
+                        let isPadPortrait = isPad && !computedIsLandscape
+                        let leftColumnRatio: CGFloat = isPad ? (isPadPortrait ? 0.30 : 0.34) : 0.35
                         let splitOuterPadding: CGFloat = isPad ? 24 : 0
-                        let splitAvailableWidth = max(1, geometry.size.width - splitOuterPadding * 2)
+                        let splitAvailableWidth = max(1, geometry.size.width - splitOuterPadding * 2 - (isPad ? 20 : 0))
                         
                         VStack {
                             Spacer()
                             
                             // 視覺區
-                            visualAnimationArea(geometry: geometry, isLandscape: true, isPad: isPad)
+                            visualAnimationArea(geometry: geometry, isLandscape: true, isPad: isPad, isCompactHome: false)
                             
                             Spacer()
                             
@@ -263,6 +240,13 @@ struct ContentView: View {
                             Spacer()
                         }
                         .frame(width: splitAvailableWidth * leftColumnRatio)
+                        .frame(maxHeight: .infinity)
+                        .background {
+                            if isPad {
+                                RoundedRectangle(cornerRadius: 30, style: .continuous).fill(.ultraThinMaterial)
+                                    .overlay { RoundedRectangle(cornerRadius: 30, style: .continuous).strokeBorder(Color.primary.opacity(0.06)) }
+                            }
+                        }
                         
                         // 右側欄：內容 + 功能列
                         VStack(spacing: isPad ? 18 : 8) {
@@ -270,13 +254,22 @@ struct ContentView: View {
                             topNavigationBar(geometry: geometry, isPad: isPad)
                                 .padding(.top, isPad ? 18 : 10)
                             
-                            // 文字閱讀區
-                            conversationArea(geometry: geometry, isLandscape: true, isPad: isPad)
-                            
-                            // 底部法律條款 (iPhone 橫向緊湊模式)
-                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: !isPad, isPad: isPad)
+                            if isShowingDailyDiscovery {
+                                ScrollView(.vertical, showsIndicators: false) {
+                                    VStack(spacing: isPad ? 18 : 12) {
+                                        dailyDiscoveryArea(isPad: isPad)
+                                            .padding(.horizontal, isPad ? 36 : 0)
+                                        footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: !isPad, isPad: isPad)
+                                    }
+                                    .padding(.bottom, isPad ? 16 : 8)
+                                }
+                            } else {
+                                conversationArea(geometry: geometry, isLandscape: true, isPad: isPad)
+                                footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: !isPad, isPad: isPad)
+                            }
                         }
                         .frame(width: splitAvailableWidth * (1 - leftColumnRatio))
+                        .frame(maxHeight: .infinity)
                         
                     }
                     .padding(.horizontal, isPad ? 24 : 0)
@@ -290,25 +283,32 @@ struct ContentView: View {
                         topNavigationBar(geometry: geometry, isPad: isPad)
                             .padding(.top, 10)
                         
-                        Spacer(minLength: 10)
+                        let usesCompactHomeLayout = isShowingDailyDiscovery && !isPad
+                        Spacer(minLength: usesCompactHomeLayout ? 2 : 10)
                         
-                        visualAnimationArea(geometry: geometry, isLandscape: false, isPad: isPad)
-                            .padding(.vertical, 10)
+                        visualAnimationArea(geometry: geometry, isLandscape: false, isPad: isPad, isCompactHome: usesCompactHomeLayout)
+                            .padding(.vertical, usesCompactHomeLayout ? 4 : 10)
                         
-                        Spacer(minLength: 10)
+                        Spacer(minLength: usesCompactHomeLayout ? 2 : 10)
                         
-                        VStack(spacing: isPad ? 24 : 20) {
-                            conversationArea(geometry: geometry, isLandscape: false, isPad: isPad)
+                        VStack(spacing: isPad ? 24 : (usesCompactHomeLayout ? 12 : 20)) {
+                            if isShowingDailyDiscovery {
+                                dailyDiscoveryArea(isPad: isPad)
+                            } else {
+                                conversationArea(geometry: geometry, isLandscape: false, isPad: isPad)
+                            }
                             
                             controlsArea(isLandscape: false, isPad: isPad)
                             
-                            Text(hintText)
-                                .font(.system(size: isPad ? 18 : 14, weight: .bold, design: .rounded))
-                                .foregroundColor(.gray.opacity(0.9))
+                            if !usesCompactHomeLayout {
+                                Text(hintText)
+                                    .font(.system(size: isPad ? 18 : 14, weight: .bold, design: .rounded))
+                                    .foregroundColor(.gray.opacity(0.9))
+                            }
                             
-                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: false, isPad: isPad)
+                            footerArea(safeAreaBottom: geometry.safeAreaInsets.bottom, isCompact: usesCompactHomeLayout, isPad: isPad)
                         }
-                        .padding(.bottom, 10)
+                        .padding(.bottom, usesCompactHomeLayout ? 4 : 10)
                     }
                     .transition(.asymmetric(
                         insertion: .move(edge: .bottom).combined(with: .opacity),
@@ -316,10 +316,8 @@ struct ContentView: View {
                     ))
                 }
             }
-            .animation(.snappy(duration: 0.35, extraBounce: 0.0), value: isLandscape)
-            .opacity(isAppearing ? 1.0 : 0.0)
-            .scaleEffect(isAppearing ? 1.0 : 0.95)
-            .blur(radius: (isServerConnected == nil || showParentalGate) ? 5 : 0)
+            .opacity(isLaunchReady ? 1.0 : 0.0)
+            .blur(radius: showParentalGate ? 5 : 0)
             // Group 不設 zIndex，保持在背景上
             
             // 預熱用隱藏組件
@@ -352,10 +350,9 @@ struct ContentView: View {
             }
             
             // 載入遮罩
-            if isServerConnected == nil {
+            if !isLaunchReady {
                 LoadingCoverView()
-                    .transition(.opacity.combined(with: .scale(scale: 1.05)))
-                    .animation(.easeOut(duration: 0.5), value: isServerConnected)
+                    .transition(.opacity)
                     .zIndex(100)
             }
             
@@ -393,6 +390,13 @@ struct ContentView: View {
         }
         .onChange(of: scenePhase) { _, newPhase in
             if newPhase == .background {
+                SpeechService.shared.stopRecording()
+                stopAudio()
+                currentTask?.cancel()
+                currentTask = nil
+                resetAssistantWaitingState()
+                isRecording = false
+                isPreparingRecording = false
                 endPlaybackIdleTimerProtection()
                 // 退出程式時重置所有介紹狀態
                 hasPlayedChineseIntro = false
@@ -431,14 +435,39 @@ struct ContentView: View {
             endPlaybackIdleTimerProtection()
         }
     }
+
+    private func scheduleLaunchReveal() {
+        guard !didScheduleLaunchReveal else { return }
+        didScheduleLaunchReveal = true
+        Task {
+            await Task.yield()
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            await MainActor.run {
+                withAnimation(.easeOut(duration: 0.28)) { isLaunchReady = true }
+            }
+        }
+    }
+
+    private var isShowingDailyDiscovery: Bool {
+        (aiResponse == localizedText.introMessage || aiResponse == localizedText.welcomeMessage)
+            && lastQuestion.isEmpty && !isRecording && !isPreparingRecording
+    }
+
+    private var membershipButtonTitle: String {
+        if subManager.hasVerifiedProAccess {
+            switch selectedLanguage { case .chinese: return "已啟用"; case .english: return "Active"; case .japanese: return "利用中" }
+        }
+        switch selectedLanguage { case .chinese: return "完整體驗"; case .english: return "Full access"; case .japanese: return "もっと楽しむ" }
+    }
     
     // MARK: - UI 組件拆分 (ViewBuilders)
     
     @ViewBuilder
     func topNavigationBar(geometry: GeometryProxy, isPad: Bool) -> some View {
-        let labelFontSize: CGFloat = isPad ? 14 : 12
         let iconSize: CGFloat = isPad ? 18 : 16
         let capsulePadding: CGFloat = isPad ? 12 : 10
+        let showsSideLabels = geometry.size.width > 380 && !usesAccessibilityText
 
         VStack(spacing: isPad ? 14 : 12) {
             ZStack {
@@ -447,17 +476,15 @@ struct ContentView: View {
                         HStack(spacing: 4) {
                             Image(systemName: "clock.arrow.circlepath")
                                 .font(.system(size: iconSize, weight: .semibold))
-                            if geometry.size.width > 380 {
+                            if showsSideLabels {
                                 Text(localizedText.historyButton)
-                                    .font(.system(size: labelFontSize, weight: .bold))
+                                    .font(.subheadline.weight(.bold)).lineLimit(1)
                             }
                         }
                         .padding(capsulePadding)
-                        .background(Color.white.opacity(0.9))
-                        .foregroundColor(.MagicBlue)
-                        .clipShape(Capsule())
-                        .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                        .frame(minHeight: 44).background(.thinMaterial, in: Capsule()).foregroundStyle(.tint)
                     }
+                    .accessibilityLabel(localizedText.historyButton)
                     Spacer()
                 }
                 HStack(spacing: 0) {
@@ -471,9 +498,7 @@ struct ContentView: View {
                         switchLanguage(to: .japanese)
                     }
                 }
-                .background(Color.white.opacity(0.9))
-                .cornerRadius(20)
-                .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                .background(.thinMaterial, in: Capsule())
                 HStack {
                     Spacer()
                     Button(action: {
@@ -482,21 +507,21 @@ struct ContentView: View {
                         }
                     }) {
                         HStack(spacing: 4) {
-                            Image(systemName: subManager.hasVerifiedProAccess ? "crown.fill" : "crown")
-                                .font(.system(size: iconSize))
-                                .foregroundColor(subManager.hasVerifiedProAccess ? .yellow : .gray)
-                            if geometry.size.width > 380 {
-                                Text(subManager.hasVerifiedProAccess ? "VIP" : "PRO")
-                                    .font(.system(size: labelFontSize, weight: .bold))
-                                    .foregroundColor(subManager.hasVerifiedProAccess ? .ButtonOrange : .gray)
+                            Image(systemName: subManager.hasVerifiedProAccess ? "checkmark.seal.fill" : "sparkles")
+                                .font(.system(size: iconSize, weight: .semibold))
+                                .foregroundStyle(subManager.hasVerifiedProAccess ? Color.green : Color.accentColor)
+                            if showsSideLabels {
+                                Text(membershipButtonTitle)
+                                    .font(.subheadline.weight(.semibold)).foregroundStyle(.primary).lineLimit(1)
                             }
                         }
                         .padding(.vertical, isPad ? 10 : 8)
                         .padding(.horizontal, isPad ? 14 : 12)
-                        .background(Color.white.opacity(0.9))
-                        .clipShape(Capsule())
-                        .shadow(color: Color.black.opacity(0.1), radius: 3, x: 0, y: 2)
+                        .frame(minHeight: 44)
+                        .background(Color.accentColor.opacity(subManager.hasVerifiedProAccess ? 0.06 : 0.10), in: Capsule())
+                        .overlay { Capsule().strokeBorder(Color.accentColor.opacity(0.14)) }
                     }
+                    .accessibilityLabel(membershipButtonTitle)
                 }
             }
             .padding(.horizontal, isPad ? 28 : 20)
@@ -525,8 +550,7 @@ struct ContentView: View {
                 }
                 .padding(.vertical, isPad ? 8 : 6)
                 .padding(.horizontal, isPad ? 14 : 12)
-                .background(Color.white.opacity(0.6))
-                .clipShape(Capsule())
+                .frame(minHeight: 44).background(.ultraThinMaterial, in: Capsule())
             }
         }
         .frame(maxWidth: isPad ? 760 : .infinity)
@@ -564,33 +588,60 @@ struct ContentView: View {
     }
     
     @ViewBuilder
-    func visualAnimationArea(geometry: GeometryProxy, isLandscape: Bool, isPad: Bool) -> some View {
+    func visualAnimationArea(geometry: GeometryProxy, isLandscape: Bool, isPad: Bool, isCompactHome: Bool = false) -> some View {
+        let iPhoneLandscapeScale: CGFloat = (isLandscape && !isPad) ? 0.7 : 1.0
+        let isPadPortraitSplit = isPad && isLandscape && geometry.size.width < geometry.size.height
+        let baseScale: CGFloat = (isLandscape && isPad && !isPadPortraitSplit) ? 1.05 : 1.0
+        let finalScale = baseScale * iPhoneLandscapeScale
+        let widthFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.24 : 0.30) : 0.45
+        let landscapeHeightFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.36 : 0.46) : 0.6
+        let portraitCap: CGFloat = isPad ? 380 : (isCompactHome ? 220 : 300)
+        let baseSize = min(
+            geometry.size.width * widthFactor,
+            isLandscape ? geometry.size.height * landscapeHeightFactor : portraitCap
+        )
+        let visualSize = baseSize * finalScale
+
         ZStack {
-            let iPhoneLandscapeScale: CGFloat = (isLandscape && !isPad) ? 0.7 : 1.0
-            let isPadPortraitSplit = isPad && isLandscape && geometry.size.width < geometry.size.height
-            let baseScale: CGFloat = (isLandscape && isPad && !isPadPortraitSplit) ? 1.05 : 1.0
-            let finalScale = baseScale * iPhoneLandscapeScale
-            
-            let widthFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.24 : 0.30) : 0.45
-            let landscapeHeightFactor: CGFloat = isPad ? (isPadPortraitSplit ? 0.36 : 0.46) : 0.6
-            let portraitCap: CGFloat = isPad ? 380 : 300
-            let baseSize = min(
-                geometry.size.width * widthFactor,
-                isLandscape ? geometry.size.height * landscapeHeightFactor : portraitCap
-            )
             
             Circle()
                 .fill(Color.white.opacity(0.85))
                 .frame(width: baseSize * finalScale, height: baseSize * finalScale)
                 .shadow(color: Color.white.opacity(0.6), radius: 20)
             
-            Circle()
-                .trim(from: 0, to: 0.7)
-                .stroke(LinearGradient(gradient: Gradient(colors: [.purple, .blue]), startPoint: .leading, endPoint: .trailing), style: StrokeStyle(lineWidth: 8, lineCap: .round))
-                .frame(width: baseSize * 0.9 * finalScale, height: baseSize * 0.9 * finalScale)
-                .rotationEffect(Angle(degrees: isThinking ? 360 : 0))
-                .animation(isThinking ? Animation.linear(duration: 1.0).repeatForever(autoreverses: false) : .default, value: isThinking)
-                .opacity(isThinking ? 1 : 0)
+            // A complete ring stays optically centred. The old 70% arc looked
+            // off-centre while it rotated because its missing segment carried
+            // most of the visual weight to one side.
+            ZStack {
+                Circle()
+                    .stroke(
+                        LinearGradient(
+                            gradient: Gradient(colors: [.purple.opacity(0.42), .blue.opacity(0.42)]),
+                            startPoint: .leading,
+                            endPoint: .trailing
+                        ),
+                        lineWidth: 7
+                    )
+
+                Circle()
+                    .fill(
+                        LinearGradient(
+                            gradient: Gradient(colors: [.purple, .blue]),
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .frame(width: 12, height: 12)
+                    .shadow(color: .purple.opacity(0.3), radius: 4)
+                    .offset(y: -(baseSize * 0.45 * finalScale))
+                    .rotationEffect(.degrees(isThinking ? 360 : 0))
+                    .animation(
+                        isThinking ? .linear(duration: 1.0).repeatForever(autoreverses: false) : .default,
+                        value: isThinking
+                    )
+            }
+            .frame(width: baseSize * 0.9 * finalScale, height: baseSize * 0.9 * finalScale)
+            .opacity(isThinking ? 1 : 0)
             
             Circle()
                 .stroke(Color.ButtonRed.opacity(0.5), lineWidth: 8)
@@ -629,28 +680,37 @@ struct ContentView: View {
                 .foregroundColor(statusColor)
                 .shadow(radius: 5)
         }
+        // Give every circle and the symbol the same explicit square canvas.
+        // Without it, SwiftUI can derive the ZStack's bounds from the SF
+        // Symbol and the trimmed ring can appear visually off-centre.
+        .frame(width: visualSize, height: visualSize, alignment: .center)
     }
     
     @ViewBuilder
     func conversationArea(geometry: GeometryProxy, isLandscape: Bool, isPad: Bool) -> some View {
         ScrollViewReader { proxy in
-            let conversationHeight: CGFloat = {
-                if isLandscape {
-                    return .infinity
-                }
+            let portraitConversationHeight: CGFloat = {
                 if isPad {
                     return min(max(geometry.size.height * 0.42, 360), 520)
                 }
                 return geometry.size.height * 0.33
             }()
+            let conversationHeight: CGFloat? = isLandscape ? nil : portraitConversationHeight
             let cardMaxWidth: CGFloat? = isPad ? (isLandscape ? 860 : 780) : nil
-            let centeredWaitingMinHeight: CGFloat = isLandscape ? 0 : max(0, conversationHeight - (isPad ? 24 : 18))
-            let shouldCenterWaitingCard = isThinking && (assistantWaitingStage == .craftingAnswer || lastQuestion.isEmpty)
-            let isShowingIntroContent = (aiResponse == localizedText.introMessage || aiResponse == localizedText.welcomeMessage) && lastQuestion.isEmpty
+            let centeredWaitingMinHeight: CGFloat = isLandscape ? 0 : max(0, portraitConversationHeight - (isPad ? 24 : 18))
+            // Once we have the child's question, keep the answer area visible
+            // while TTS is generated. Only a brand-new request with no
+            // question should replace the reading area with a centred loader.
+            let shouldCenterWaitingCard = isThinking && lastQuestion.isEmpty
+            let isShowingIntroContent = isShowingDailyDiscovery
 
-            let scrollToUserText = {
+            let scrollToUserText: (Bool) -> Void = { animated in
                 DispatchQueue.main.async {
-                    withAnimation(.easeInOut(duration: 0.2)) {
+                    if animated {
+                        withAnimation(.easeOut(duration: 0.16)) {
+                            proxy.scrollTo("UserText", anchor: .center)
+                        }
+                    } else {
                         proxy.scrollTo("UserText", anchor: .center)
                     }
                 }
@@ -672,13 +732,9 @@ struct ContentView: View {
                         }
                         .frame(maxWidth: .infinity, minHeight: centeredWaitingMinHeight)
                     } else if isRecording || isPreparingRecording {
-                        Text(userSpokenText)
-                            .font(.system(size: isPad ? 34 : 28, weight: .bold, design: .rounded))
-                            .foregroundColor(isPreparingRecording ? .gray : .ButtonRed)
-                            .multilineTextAlignment(.center)
-                            .lineSpacing(10)
-                            .padding()
-                            .frame(maxWidth: .infinity, alignment: .center)
+                        DictationCard(transcript: userSpokenText, language: selectedLanguage, isPreparing: isPreparingRecording, isPad: isPad)
+                            .padding(isPad ? 24 : 16)
+                            .frame(maxWidth: .infinity, minHeight: centeredWaitingMinHeight, alignment: .center)
                             .id("UserText")
                     } else {
                         VStack(alignment: .leading, spacing: 12) {
@@ -737,12 +793,12 @@ struct ContentView: View {
                                     }
                                 )
                             } else if selectedLanguage == .japanese {
-                                JapaneseContentView(
-                                    japaneseSentences: englishSentences,
+                                JapaneseWordFlowContentView(
+                                    tokens: wordTokens,
+                                    fullText: aiResponse,
                                     isPlaying: isPlaying,
-                                    currentSentenceIndex: currentSentenceIndex,
+                                    currentWordIndex: currentWordIndex,
                                     isUserScrolling: isUserScrolling,
-                                    isPad: isPad,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo(index, anchor: .center)
@@ -750,12 +806,12 @@ struct ContentView: View {
                                     }
                                 )
                             } else {
-                                EnglishContentView(
-                                    englishSentences: englishSentences,
+                                EnglishWordFlowContentView(
+                                    tokens: wordTokens,
+                                    fullText: aiResponse,
                                     isPlaying: isPlaying,
-                                    currentSentenceIndex: currentSentenceIndex,
+                                    currentWordIndex: currentWordIndex,
                                     isUserScrolling: isUserScrolling,
-                                    isPad: isPad,
                                     onScrollTo: { index in
                                         withAnimation(.easeInOut(duration: 0.5)) {
                                             proxy.scrollTo(index, anchor: .center)
@@ -777,15 +833,18 @@ struct ContentView: View {
                 }
                 .onChange(of: isPreparingRecording) { _, newValue in
                     guard newValue, !isUserScrolling else { return }
-                    scrollToUserText()
+                    scrollToUserText(true)
                 }
                 .onChange(of: isRecording) { _, newValue in
                     guard newValue, !isUserScrolling else { return }
-                    scrollToUserText()
+                    scrollToUserText(true)
                 }
                 .onChange(of: userSpokenText) { _, _ in
                     guard (isRecording || isPreparingRecording), !isUserScrolling else { return }
-                    scrollToUserText()
+                    let now = Date()
+                    guard now.timeIntervalSince(lastTranscriptScrollAt) >= 0.12 else { return }
+                    lastTranscriptScrollAt = now
+                    scrollToUserText(false)
                 }
                 
                 if isUserScrolling && isPlaying {
@@ -794,11 +853,24 @@ struct ContentView: View {
             }
             .frame(maxWidth: cardMaxWidth)
             .frame(height: conversationHeight)
+            .frame(maxHeight: isLandscape ? .infinity : nil)
             .background(Color.white.opacity(0.95))
             .cornerRadius(25)
             .shadow(color: Color.black.opacity(0.1), radius: 10, x: 0, y: 5)
             .padding(.horizontal, isLandscape ? (isPad ? 18 : 0) : (isPad ? 36 : 24))
         }
+    }
+
+    @ViewBuilder
+    private func dailyDiscoveryArea(isPad: Bool) -> some View {
+        DailyDiscoveryCard(
+            language: selectedLanguage,
+            isPad: isPad,
+            isEnabled: !isThinking && !isRecording && !isPreparingRecording,
+            onQuestionSelected: askDailyDiscoveryQuestion
+        )
+        .frame(maxWidth: isPad ? 780 : .infinity)
+        .padding(.horizontal, isPad ? 0 : 24)
     }
     
     @ViewBuilder
@@ -1084,7 +1156,7 @@ struct ContentView: View {
                 await completeAssistantWaitingBeforePlayback()
                 if Task.isCancelled { return }
 
-                await playAudio(data: audioData, textToRead: textToReplay)
+                await playAudio(data: audioData, textToRead: textToReplay, spokenText: cleanText)
             } catch {
                 if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
                     print("🚫 重播任務已取消，靜默處理")
@@ -1161,7 +1233,7 @@ struct ContentView: View {
                 .split(separator: "|")
                 .map { String($0).trimmingCharacters(in: .whitespacesAndNewlines) }
             englishSentences = rawSentences.isEmpty ? [aiResponse] : rawSentences
-            wordTokens = buildWordTokens(for: aiResponse)
+            wordTokens = buildJapaneseKaraokeTokens(for: aiResponse)
         } else {
             // 英文
             let rawSentences = aiResponse
@@ -1225,6 +1297,58 @@ struct ContentView: View {
         return tokens
     }
 
+    /// Preserve `漢字(かんじ)` as one visual token. Standard word tokenizers
+    /// split the ruby annotation from its kanji, which makes karaoke
+    /// highlighting lose the reading above the matching word.
+    func buildJapaneseKaraokeTokens(for text: String) -> [WordToken] {
+        guard !text.isEmpty else { return [] }
+        // Keep a kanji+ruby group together so its reading stays above the
+        // matching kanji. Pure kana is intentionally one character per token:
+        // Japanese children can then follow the red karaoke highlight one
+        // mora/character at a time instead of seeing a whole kana word jump.
+        let pattern = #"[一-龯々〆ヶ]+\([^)]*\)|[一-龯々〆ヶ]+|[ぁ-んァ-ヶー]|[A-Za-z0-9]+|[^\s]"#
+        guard let expression = try? NSRegularExpression(pattern: pattern) else {
+            return buildWordTokens(for: text)
+        }
+        let fullRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        let punctuation = CharacterSet.punctuationCharacters.union(.symbols)
+        let closingPunctuation: Set<String> = ["、", "。", "！", "？", "）", "」", "』", "】"]
+        var tokens: [WordToken] = []
+
+        for match in expression.matches(in: text, range: fullRange) {
+            guard let range = Range(match.range, in: text) else { continue }
+            let token = String(text[range])
+            let isWord = token.unicodeScalars.contains { !punctuation.contains($0) }
+            let start = text.distance(from: text.startIndex, to: range.lowerBound)
+            let length = text.distance(from: range.lowerBound, to: range.upperBound)
+
+            // Japanese kinsoku shori: a closing punctuation mark must never
+            // start a new visual line. Keep it in the preceding word token so
+            // FlowLayout measures and wraps both as a single unit.
+            if closingPunctuation.contains(token),
+               let last = tokens.last,
+               last.isWord {
+                tokens[tokens.count - 1] = WordToken(
+                    id: last.id,
+                    text: last.text + token,
+                    start: last.start,
+                    length: (start + length) - last.start,
+                    isWord: true
+                )
+                continue
+            }
+
+            tokens.append(WordToken(
+                id: tokens.count,
+                text: token,
+                start: start,
+                length: length,
+                isWord: isWord
+            ))
+        }
+        return tokens
+    }
+
     func wordTokenIndex(for charIndex: Int, tokens: [WordToken]) -> Int {
         var lastWordIndex: Int?
         for (index, token) in tokens.enumerated() {
@@ -1247,6 +1371,97 @@ struct ContentView: View {
             return index
         }
         return max(tokens.count - 1, 0)
+    }
+
+    /// Map the audio clock to the visual ruby tokens. The visual string can
+    /// contain `漢字(かんじ)` while the actual TTS request contains only `漢字`.
+    /// First allocate time using the real spoken sentence lengths, then use
+    /// ruby weights only within that sentence. This prevents a long answer
+    /// from drifting further off screen after each unannotated kanji word.
+    func japaneseKaraokeTokenIndex(for progress: Double, tokens: [WordToken], spokenText: String) -> Int {
+        let spokenTokens = tokens.filter(\.isWord)
+        guard !spokenTokens.isEmpty else { return 0 }
+
+        let visualSentences = japaneseTokenSentences(tokens)
+        let spokenSentenceWeights = japaneseSpokenSentenceWeights(spokenText)
+        guard !visualSentences.isEmpty else { return spokenTokens.first?.id ?? 0 }
+
+        let sentenceWeights: [Double] = visualSentences.enumerated().map { index, _ in
+            Double(index < spokenSentenceWeights.count ? spokenSentenceWeights[index] : (spokenSentenceWeights.last ?? 1))
+        }
+        let totalSentenceWeight = max(sentenceWeights.reduce(0, +), 1)
+        let target = min(max(progress, 0), 1) * totalSentenceWeight
+
+        var sentenceIndex = visualSentences.count - 1
+        var completedWeight = 0.0
+        for (index, weight) in sentenceWeights.enumerated() {
+            if target <= completedWeight + weight {
+                sentenceIndex = index
+                break
+            }
+            completedWeight += weight
+        }
+
+        let sentenceProgress = min(max((target - completedWeight) / max(sentenceWeights[sentenceIndex], 1), 0), 1)
+        let sentenceWords = visualSentences[sentenceIndex].filter(\.isWord)
+        guard !sentenceWords.isEmpty else { return visualSentences[sentenceIndex].last?.id ?? spokenTokens.last?.id ?? 0 }
+
+        let wordWeights = sentenceWords.map { Double(japaneseSpokenWeight(for: $0.text)) }
+        let wordTarget = sentenceProgress * max(wordWeights.reduce(0, +), 1)
+        var accumulated = 0.0
+        for (index, token) in sentenceWords.enumerated() {
+            accumulated += wordWeights[index]
+            if wordTarget <= accumulated {
+                return token.id
+            }
+        }
+        return sentenceWords.last?.id ?? spokenTokens.last?.id ?? 0
+    }
+
+    private func japaneseTokenSentences(_ tokens: [WordToken]) -> [[WordToken]] {
+        var result: [[WordToken]] = []
+        var current: [WordToken] = []
+        for token in tokens {
+            current.append(token)
+            if token.text.contains(where: { "。！？!?".contains($0) }) {
+                result.append(current)
+                current = []
+            }
+        }
+        if !current.isEmpty { result.append(current) }
+        return result
+    }
+
+    private func japaneseSpokenSentenceWeights(_ text: String) -> [Int] {
+        var weights: [Int] = []
+        var current = 0
+        for character in text {
+            if !character.isWhitespace { current += 1 }
+            if "。！？!?".contains(character) {
+                weights.append(max(current, 1))
+                current = 0
+            }
+        }
+        if current > 0 { weights.append(current) }
+        return weights.isEmpty ? [max(text.filter { !$0.isWhitespace }.count, 1)] : weights
+    }
+
+    private func japaneseSpokenWeight(for token: String) -> Int {
+        let parentheticalPattern = #"[\(（]([ぁ-んァ-ヴー]+)[\)）]"#
+        if let expression = try? NSRegularExpression(pattern: parentheticalPattern),
+           let match = expression.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)),
+           let readingRange = Range(match.range(at: 1), in: token) {
+            return max(1, token[readingRange].count)
+        }
+
+        let htmlRubyPattern = #"<rt>(.*?)</rt>"#
+        if let expression = try? NSRegularExpression(pattern: htmlRubyPattern, options: [.caseInsensitive]),
+           let match = expression.firstMatch(in: token, range: NSRange(token.startIndex..., in: token)),
+           let readingRange = Range(match.range(at: 1), in: token) {
+            return max(1, token[readingRange].filter { !$0.isWhitespace }.count)
+        }
+
+        return max(1, token.filter { !$0.isWhitespace }.count)
     }
     
     func calculateCurrentSentence(charIndex: Int) {
@@ -1480,7 +1695,7 @@ struct ContentView: View {
                 await completeAssistantWaitingBeforePlayback()
                 if Task.isCancelled { return }
                 
-                await playAudio(data: audioData, textToRead: introText)
+                await playAudio(data: audioData, textToRead: introText, spokenText: cleanText)
                 
                 // 根據當前語言設定對應的介紹狀態
                 await MainActor.run {
@@ -1627,24 +1842,10 @@ struct ContentView: View {
             assistantWaitingTask?.cancel()
             assistantWaitingTask = nil
             assistantWaitingStage = .preparingPlayback
-            withAnimation(.easeOut(duration: 0.18)) {
-                assistantWaitingProgress = max(
-                    assistantWaitingProgress,
-                    AssistantWaitingStage.preparingPlayback.progressFloor
-                )
-            }
+            // The audio bytes are ready. Do not hold playback for a cosmetic
+            // progress animation; children should hear the answer immediately.
+            assistantWaitingProgress = 1.0
         }
-
-        try? await Task.sleep(nanoseconds: 140_000_000)
-        if Task.isCancelled { return }
-
-        await MainActor.run {
-            withAnimation(.easeOut(duration: 0.2)) {
-                assistantWaitingProgress = 1.0
-            }
-        }
-
-        try? await Task.sleep(nanoseconds: 120_000_000)
     }
     
     func checkServerStatus() {
@@ -1695,6 +1896,24 @@ struct ContentView: View {
         }
     }
 
+    func askDailyDiscoveryQuestion(_ question: String) {
+        guard !isThinking, !isRecording, !isPreparingRecording, !question.isEmpty else { return }
+        if !subManager.hasVerifiedProAccess {
+            guard subManager.isSubscriptionLoaded, subManager.hasServerTime, checkFreeQuota() else {
+                userSpokenText = localizedText.statusConnecting
+                return
+            }
+        }
+        stopAudio()
+        SpeechService.shared.stopRecording()
+        lastQuestion = question
+        userSpokenText = question
+        currentWordIndex = 0
+        currentSentenceIndex = 0
+        isUserScrolling = false
+        sendToAI(question: question)
+    }
+
     private func beginRecording() {
         #if DEBUG
         print("[STT] startListening language=\(selectedLanguage.rawValue)")
@@ -1720,15 +1939,28 @@ struct ContentView: View {
             self.isRecording = true
             self.userSpokenText = self.aiListeningSymbol
         }
+
+        SpeechService.shared.onRecognitionFailed = { _ in
+            // A recognizer can fail immediately after creation, before the
+            // "recording started" callback reaches the main queue. Do not
+            // discard that genuine failure or the UI can be left showing an
+            // active microphone even though no recognizer exists.
+            self.isRecording = false
+            self.isPreparingRecording = false
+            self.userSpokenText = self.localizedText.errorSpeechUnavailable
+        }
         
         SpeechService.shared.onSpeechDetected = { text, isFinished in
             #if DEBUG
             print("[STT] partial len=\(text.count) isFinished=\(isFinished)")
             #endif
+            if !text.isEmpty { self.userSpokenText = text }
             if isFinished {
-                self.finishRecording()
-            } else {
-                if !text.isEmpty { self.userSpokenText = text }
+                Task { @MainActor in
+                    try? await Task.sleep(nanoseconds: 550_000_000)
+                    guard self.isRecording else { return }
+                    self.finishRecording()
+                }
             }
         }
         
@@ -1755,12 +1987,14 @@ struct ContentView: View {
         #endif
         let generator = UIImpactFeedbackGenerator(style: .heavy)
         generator.impactOccurred()
-        if userSpokenText == aiListeningSymbol || userSpokenText.isEmpty || userSpokenText == "..." {
+        let question = userSpokenText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if question == aiListeningSymbol || question.isEmpty || question == "..." {
             userSpokenText = localizedText.errorTooQuiet
             return
         }
-        lastQuestion = userSpokenText
-        sendToAI(question: userSpokenText)
+        userSpokenText = question
+        lastQuestion = question
+        sendToAI(question: question)
     }
     
     func sendToAI(question: String, historyQuestion: String? = nil) {
@@ -1777,13 +2011,19 @@ struct ContentView: View {
                     language: selectedLanguage,
                     answerDepth: requestedDepth
                 )
-                let answer = PromptVisibilitySanitizer.visibleAnswer(
+                let sanitizedAnswer = PromptVisibilitySanitizer.visibleAnswer(
                     from: answerResponse.answer.trimmingCharacters(in: .whitespacesAndNewlines),
                     language: selectedLanguage.rawValue
                 )
+                let answer = selectedLanguage == .japanese
+                    ? sanitizedAnswer.normalizedJapaneseDisplayTypography()
+                    : sanitizedAnswer
                 guard !answer.isEmpty else {
                     throw OpenAIError.noData
                 }
+
+                // Keep the reading card and speech aligned to the same full answer.
+                let playbackAnswer = answer
                 
                 if Task.isCancelled { return }
                 
@@ -1800,7 +2040,7 @@ struct ContentView: View {
                     lastTTSInput = answerResponse.ttsInput
                     lastSpeechTicket = answerResponse.speechTicket
                     aiResponse = ""
-                    aiResponse = answer
+                    aiResponse = playbackAnswer
                     currentWordIndex = 0
                     currentSentenceIndex = 0
                     isUserScrolling = false
@@ -1822,7 +2062,7 @@ struct ContentView: View {
                 await completeAssistantWaitingBeforePlayback()
                 if Task.isCancelled { return }
                 
-                await playAudio(data: audioData, textToRead: answer)
+                await playAudio(data: audioData, textToRead: playbackAnswer, spokenText: answerResponse.ttsInput)
                 
             } catch {
                 if (error as? URLError)?.code == .cancelled || (error is CancellationError) {
@@ -1845,7 +2085,7 @@ struct ContentView: View {
     }
     
     @MainActor
-    func playAudio(data: Data, textToRead: String) async {
+    func playAudio(data: Data, textToRead: String, spokenText: String? = nil) async {
         do {
             stopAudio()
             beginPlaybackIdleTimerProtection()
@@ -1943,7 +2183,11 @@ struct ContentView: View {
             #endif
             
             var smoothedProgress = 0.0
-            textTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { timer in
+            // Chinese highlights individual characters. A faster display tick
+            // keeps the cursor attached to the spoken syllable instead of
+            // visibly catching up in batches.
+            let karaokeTick: TimeInterval = (selectedLanguage == .chinese || selectedLanguage == .japanese) ? 0.05 : 0.08
+            textTimer = Timer.scheduledTimer(withTimeInterval: karaokeTick, repeats: true) { timer in
                 guard let player = self.audioPlayer else {
                     timer.invalidate()
                     self.endPlaybackIdleTimerProtection()
@@ -1962,26 +2206,25 @@ struct ContentView: View {
                         didStartPlayback = true
                     }
                     
-                    // 🔥 優化 6: 使用波形分析結果調整時間軸
-                    let adjustedCurrentTime = max(0, player.currentTime - leadingSilence)
-                    let adjustedDuration = max(0.001, player.duration - leadingSilence - trailingSilence)
-                    
-                    // Base percentage from player（使用調整後的時間）
-                    let raw = max(0.0, min(1.0, adjustedCurrentTime / adjustedDuration))
+                    // Chinese must follow the audio player's actual clock.
+                    // The old estimated leading/trailing silence values made
+                    // the lyrics start early and finish too soon. Keep those
+                    // estimates for the existing English behaviour, but never
+                    // use them to alter Chinese or Japanese karaoke timing.
+                    let raw: Double
+                    if self.selectedLanguage == .chinese || self.selectedLanguage == .japanese {
+                        raw = max(0.0, min(1.0, player.currentTime / max(player.duration, 0.001)))
+                    } else {
+                        let adjustedCurrentTime = max(0, player.currentTime - leadingSilence)
+                        let adjustedDuration = max(0.001, player.duration - leadingSilence - trailingSilence)
+                        raw = max(0.0, min(1.0, adjustedCurrentTime / adjustedDuration))
+                    }
                     
                     if self.selectedLanguage == .chinese {
-                        // 以句子為單位的進度（與英/日一致）
-                        var adjustedPercentage = raw
-                        if raw < 0.03 {
-                            adjustedPercentage = 0.0
-                        } else if raw > 0.95 {
-                            adjustedPercentage = 1.0
-                        } else {
-                            adjustedPercentage = (raw - 0.03) / 0.92
-                        }
-
-                        smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
-                        let progress = max(0.0, min(1.0, smoothedProgress))
+                        // Do not smooth or re-map Chinese progress. The
+                        // smoothing delay was noticeable for short syllables,
+                        // and the remapping changed the perceived speech rate.
+                        let progress = raw
                         let charIndex: Int
                         if zhTotal > 0 {
                             charIndex = indexForChineseProgress(progress: progress, cumulative: zhCumulative)
@@ -2005,24 +2248,26 @@ struct ContentView: View {
                         smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
                         let progress = max(0.0, min(1.0, smoothedProgress))
                         let charIndex = Int(Double(displayCharsCount) * progress)
-                        self.currentWordIndex = charIndex
-                        self.calculateCurrentSentence(charIndex: charIndex)
-                    } else if self.selectedLanguage == .japanese {
-                        // 🇯🇵 日文時間校正
-                        var adjustedPercentage = raw
-                        if raw < 0.03 {
-                            adjustedPercentage = 0.0
-                        } else if raw > 0.95 {
-                            adjustedPercentage = 1.0
-                        } else {
-                            adjustedPercentage = (raw - 0.03) / 0.92
+                        let tokenIndex = self.wordTokenIndex(for: charIndex, tokens: self.wordTokens)
+                        if self.currentWordIndex != tokenIndex {
+                            self.currentWordIndex = tokenIndex
+                            self.calculateCurrentSentence(charIndex: charIndex)
                         }
-
-                        smoothedProgress = smoothedProgress * (1.0 - dynamicAlpha) + adjustedPercentage * dynamicAlpha
-                        let progress = max(0.0, min(1.0, smoothedProgress))
-                        let charIndex = Int(Double(displayCharsCount) * progress)
-                        self.currentWordIndex = charIndex
-                        self.calculateCurrentSentence(charIndex: charIndex)
+                    } else if self.selectedLanguage == .japanese {
+                        // 🇯🇵 日文依「實際朗讀的底字」校正。畫面上的
+                        // ふりがな不會被算成朗讀進度，避免字幕越播越跳。
+                        // Use the same unmodified player clock as Chinese.
+                        // Re-mapping and smoothing made the highlighted word
+                        // drift, especially at punctuation and ruby words.
+                        let progress = raw
+                        let tokenIndex = self.japaneseKaraokeTokenIndex(
+                            for: progress,
+                            tokens: self.wordTokens,
+                            spokenText: spokenText ?? textToRead.cleanForTTS(language: .japanese)
+                        )
+                        if self.currentWordIndex != tokenIndex {
+                            self.currentWordIndex = tokenIndex
+                        }
                     }
                     
                 } else {
@@ -2031,7 +2276,7 @@ struct ContentView: View {
                     if self.selectedLanguage == .chinese {
                         endIndex = displayCharsCount
                     } else {
-                        endIndex = displayCharsCount
+                        endIndex = self.lastWordTokenIndex(in: self.wordTokens)
                     }
                     self.currentWordIndex = endIndex
                     self.currentSentenceIndex = max(0, self.englishSentences.count - 1)
@@ -2084,7 +2329,7 @@ struct ContentView: View {
             isUserScrolling = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 withAnimation(.spring()) {
-                    let targetIndex = (selectedLanguage == .chinese) ? currentWordIndex : currentSentenceIndex
+                    let targetIndex = currentWordIndex
                     proxy.scrollTo(targetIndex, anchor: .center)
                 }
             }
@@ -2288,6 +2533,93 @@ struct IntroTopicChip: View {
     }
 }
 
+private struct DiscoveryPrompt: Identifiable {
+    let id: String
+    let topic: String
+    let question: String
+    let icon: String
+}
+
+private struct DailyDiscoveryCard: View {
+    let language: AppLanguage
+    let isPad: Bool
+    let isEnabled: Bool
+    let onQuestionSelected: (String) -> Void
+    @State private var selectedPromptID = ""
+    @ScaledMetric(relativeTo: .body) private var textScale: CGFloat = 1
+
+    private var title: String {
+        switch language { case .chinese: return "今天想發現什麼？"; case .english: return "Let’s discover!"; case .japanese: return "今日(きょう)は何(なに)を発見(はっけん)する？" }
+    }
+    private var subtitle: String {
+        switch language { case .chinese: return "選一個問題，安安老師會用聲音告訴你。"; case .english: return "Pick a question and Teacher An-An will explain it aloud."; case .japanese: return "質問(しつもん)を一(ひと)つ選(えら)ぶと、あんあん先生(せんせい)が声(こえ)で教(おし)えてくれるよ。" }
+    }
+    private var actionTitle: String {
+        switch language { case .chinese: return "點一下探索"; case .english: return "Tap to explore"; case .japanese: return "タップして、しらべよう" }
+    }
+    private var prompts: [DiscoveryPrompt] {
+        switch language {
+        case .chinese: return [
+            .init(id: "space", topic: "宇宙", question: "月亮為什麼有時候圓圓的，有時候彎彎的？", icon: "sparkles"),
+            .init(id: "nature", topic: "自然", question: "彩虹為什麼會出現在天空？", icon: "leaf.fill"),
+            .init(id: "body", topic: "身體", question: "我們睡覺的時候，身體在做什麼？", icon: "heart.fill")]
+        case .english: return [
+            .init(id: "space", topic: "Space", question: "Why does the moon sometimes look round and sometimes curved?", icon: "sparkles"),
+            .init(id: "nature", topic: "Nature", question: "Why does a rainbow appear in the sky?", icon: "leaf.fill"),
+            .init(id: "body", topic: "Body", question: "What does our body do while we sleep?", icon: "heart.fill")]
+        case .japanese: return [
+            .init(id: "space", topic: "宇宙", question: "月(つき)は、どうして丸(まる)い日(ひ)と細(ほそ)い日(ひ)があるの？", icon: "sparkles"),
+            .init(id: "nature", topic: "自然", question: "虹(にじ)は、どうして空(そら)に出(で)るの？", icon: "leaf.fill"),
+            .init(id: "body", topic: "からだ", question: "眠(ねむ)っているとき、からだは何(なに)をしているの？", icon: "heart.fill")]
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: isPad ? 16 : 12) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Image(systemName: "sparkles").foregroundStyle(.tint)
+                if language == .japanese {
+                    FuriganaText(title, fontSize: (isPad ? 23 : 20) * textScale, fontWeight: .bold, textColor: .primary, lineSpacing: 6)
+                } else {
+                    Text(title).font(.system(size: (isPad ? 23 : 20) * textScale, weight: .bold, design: .rounded))
+                }
+                Spacer(minLength: 0)
+            }
+            if language == .japanese {
+                FuriganaText(subtitle, fontSize: (isPad ? 17 : 15) * textScale, fontWeight: .medium, textColor: .secondary, lineSpacing: 8)
+            } else {
+                Text(subtitle).font(.system(size: (isPad ? 17 : 15) * textScale, weight: .medium, design: .rounded)).foregroundStyle(.secondary)
+            }
+            TabView(selection: $selectedPromptID) {
+                ForEach(prompts) { prompt in
+                    Button { onQuestionSelected(prompt.question) } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Label(prompt.topic, systemImage: prompt.icon).font(.headline.weight(.bold)).foregroundStyle(.tint)
+                            if language == .japanese {
+                                FuriganaText(prompt.question, fontSize: (isPad ? 21 : 18) * textScale, fontWeight: .bold, textColor: .primary, lineSpacing: 6)
+                            } else {
+                                Text(prompt.question).font(.system(size: (isPad ? 23 : 20) * textScale, weight: .bold, design: .rounded)).multilineTextAlignment(.leading)
+                            }
+                            Spacer(minLength: 0)
+                            Label(actionTitle, systemImage: "speaker.wave.2.fill").font(.headline.weight(.bold)).foregroundStyle(.tint)
+                        }
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding(isPad ? 20 : 16)
+                    }
+                    .buttonStyle(.plain).background(Color.accentColor.opacity(0.10), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+                    .overlay { RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(Color.accentColor.opacity(0.20)) }
+                    .disabled(!isEnabled).opacity(isEnabled ? 1 : 0.55).tag(prompt.id)
+                }
+            }
+            .tabViewStyle(.page(indexDisplayMode: .never))
+            .frame(height: (isPad ? 190 : 164) * min(textScale, 1.45))
+            HStack(spacing: 8) { ForEach(prompts) { prompt in Circle().fill(prompt.id == selectedPromptID ? Color.accentColor : Color.secondary.opacity(0.28)).frame(width: 8, height: 8) } }.frame(maxWidth: .infinity)
+        }
+        .padding(isPad ? 20 : 16).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(Color.accentColor.opacity(0.12)) }
+        .onAppear { selectedPromptID = prompts.first?.id ?? "" }
+    }
+}
+
 // MARK: - 新增獨立中文內容視圖（卡拉OK效果）
 struct ChineseContentView: View {
     let characterData: [(char: String, bopomofo: String)]
@@ -2330,6 +2662,7 @@ struct ChineseCharacterView: View {
     let currentIndex: Int
     let isPlaying: Bool
     let isPad: Bool
+    @ScaledMetric(relativeTo: .body) private var textScale: CGFloat = 1
 
     var body: some View {
         let isCurrent = index == currentIndex  // 正在唸
@@ -2337,15 +2670,15 @@ struct ChineseCharacterView: View {
             .replacingOccurrences(of: " ", with: "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
         let isWhitespace = character.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        let cellWidth: CGFloat = isPad ? 48 : 40
+        let cellWidth: CGFloat = (isPad ? 48 : 40) * textScale
         let displayWidth: CGFloat = isWhitespace ? cellWidth * 0.45 : cellWidth
-        let cellHeight: CGFloat = isPad ? 58 : 50
-        let bopomofoHeight: CGFloat = isPad ? 17 : 14
-        let characterSize: CGFloat = isPad ? 31 : 25
+        let cellHeight: CGFloat = (isPad ? 58 : 50) * textScale
+        let bopomofoHeight: CGFloat = (isPad ? 17 : 14) * textScale
+        let characterSize: CGFloat = (isPad ? 31 : 25) * textScale
         
         VStack(spacing: 1) {
             Text(normalizedBopomofo.isEmpty ? " " : normalizedBopomofo)
-                .font(.system(size: isPad ? 12 : 10, weight: .regular, design: .rounded))
+                .font(.system(size: (isPad ? 12 : 10) * textScale, weight: .regular, design: .rounded))
                 .foregroundColor(getBopomofoColor())
                 .opacity(normalizedBopomofo.isEmpty ? 0 : getBopomofoOpacity())
                 .lineLimit(1)
@@ -2363,7 +2696,10 @@ struct ChineseCharacterView: View {
             RoundedRectangle(cornerRadius: isPad ? 12 : 10, style: .continuous)
                 .fill(isCurrent && isPlaying ? Color.ButtonOrange.opacity(0.12) : Color.clear)
         )
-        .animation(.spring(response: 0.25, dampingFraction: 0.7), value: isCurrent)
+        // A spring looks playful but lags behind fast Mandarin syllables.
+        // Keep the state change nearly immediate so the character remains
+        // aligned with the audio clock.
+        .animation(.linear(duration: 0.05), value: isCurrent)
     }
     
     // 🎨 注音符號顏色
@@ -2418,10 +2754,11 @@ struct EnglishContentView: View {
     let isUserScrolling: Bool
     let isPad: Bool
     let onScrollTo: (Int) -> Void
+    @ScaledMetric(relativeTo: .body) private var textScale: CGFloat = 1
     
     var body: some View {
-        let inactiveFontSize: CGFloat = isPad ? 19 : 18
-        let activeFontSize: CGFloat = isPad ? 22 : 20
+        let inactiveFontSize: CGFloat = (isPad ? 19 : 18) * textScale
+        let activeFontSize: CGFloat = (isPad ? 22 : 20) * textScale
 
         VStack(spacing: isPad ? 16 : 12) {
             ForEach(Array(englishSentences.enumerated()), id: \.offset) { index, sentence in
@@ -2471,11 +2808,12 @@ struct JapaneseContentView: View {
     let isUserScrolling: Bool
     let isPad: Bool
     let onScrollTo: (Int) -> Void
+    @ScaledMetric(relativeTo: .body) private var textScale: CGFloat = 1
     
     var body: some View {
-        let inactiveFontSize: CGFloat = isPad ? 19 : 18
-        let activeFontSize: CGFloat = isPad ? 22 : 20
-        let rubyLineSpacing: CGFloat = isPad ? 12 : 11
+        let inactiveFontSize: CGFloat = (isPad ? 19 : 18) * textScale
+        let activeFontSize: CGFloat = (isPad ? 22 : 20) * textScale
+        let rubyLineSpacing: CGFloat = (isPad ? 12 : 11) * textScale
 
         VStack(spacing: isPad ? 16 : 12) {
             ForEach(Array(japaneseSentences.enumerated()), id: \.offset) { index, sentence in
@@ -2604,6 +2942,7 @@ struct EnglishWordFlowContentView: View {
     let currentWordIndex: Int
     let isUserScrolling: Bool
     let onScrollTo: (Int) -> Void
+    @State private var lastAutoScrollToken = -6
 
     @ViewBuilder
     private var content: some View {
@@ -2629,10 +2968,15 @@ struct EnglishWordFlowContentView: View {
                     }()
 
                     Text(token.text)
-                        .font(.system(size: isCurrent ? 22 : 20, weight: isCurrent ? .bold : .regular, design: .rounded))
+                        // Keep every token's measured size constant. Changing
+                        // font size/weight on each spoken word makes a flow
+                        // layout recalculate its line breaks and visibly jump.
+                        .font(.system(size: 20, weight: .semibold, design: .rounded))
                         .foregroundColor(color)
-                        .scaleEffect(isCurrent ? 1.08 : 1.0)
-                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: currentWordIndex)
+                        .padding(.horizontal, 2)
+                        .padding(.vertical, 1)
+                        .background(isCurrent ? Color.accentColor.opacity(0.14) : .clear, in: Capsule())
+                        .animation(.easeOut(duration: 0.12), value: currentWordIndex)
                         .id(token.id)
                 }
             }
@@ -2644,7 +2988,8 @@ struct EnglishWordFlowContentView: View {
             .padding()
             .padding(.bottom, 40)
             .onChange(of: currentWordIndex) { _, newIndex in
-                if newIndex > 0 && !isUserScrolling {
+                if newIndex > 0 && !isUserScrolling && newIndex - lastAutoScrollToken >= 6 {
+                    lastAutoScrollToken = newIndex
                     onScrollTo(newIndex)
                 }
             }
@@ -2658,6 +3003,23 @@ struct JapaneseWordFlowContentView: View {
     let currentWordIndex: Int
     let isUserScrolling: Bool
     let onScrollTo: (Int) -> Void
+    @State private var lastAutoScrollSentenceStart = -1
+
+    /// Japanese is normally set as continuous text without word spaces.
+    /// Let the real measured ruby width choose each line break instead of
+    /// imposing a character-count grid.
+    private func sentenceStartToken(for tokenID: Int) -> Int? {
+        guard let currentIndex = tokens.firstIndex(where: { $0.id == tokenID }) else { return nil }
+        var index = currentIndex
+        while index > 0 {
+            let previous = tokens[index - 1]
+            if previous.text.contains(where: { "。！？!?".contains($0) }) {
+                break
+            }
+            index -= 1
+        }
+        return tokens[index].id
+    }
 
     @ViewBuilder
     private var content: some View {
@@ -2670,35 +3032,32 @@ struct JapaneseWordFlowContentView: View {
                 lineSpacing: 14
             )
         } else {
-            FlowLayout(spacing: 4, lineSpacing: 14) {
-                ForEach(Array(tokens.enumerated()), id: \.offset) { _, token in
+            FlowLayout(spacing: 0, lineSpacing: 12) {
+                ForEach(tokens) { token in
                     let tokenIndex = token.id
                     let isCurrent = isPlaying && token.isWord && tokenIndex == currentWordIndex
                     let isPast = isPlaying && token.isWord && tokenIndex < currentWordIndex
                     let color: Color = {
-                        if !isPlaying {
-                            return .gray.opacity(0.7)
-                        }
-                        if token.isWord {
-                            return isCurrent ? .ButtonRed : (isPast ? .MagicBlue : .gray.opacity(0.6))
-                        }
+                        if !isPlaying { return .gray.opacity(0.7) }
+                        if token.isWord { return isCurrent ? .ButtonRed : (isPast ? .MagicBlue : .gray.opacity(0.6)) }
                         return .gray.opacity(0.6)
                     }()
 
                     if token.isWord {
-                        FuriganaText(
-                            token.text,
-                            fontSize: isCurrent ? 22 : 20,
-                            fontWeight: isCurrent ? .bold : .regular,
-                            textColor: color,
-                            lineSpacing: 14
+                        JapaneseKaraokeTokenView(
+                            token: token.text,
+                            fontSize: 20,
+                            fontWeight: .semibold,
+                            textColor: color
                         )
-                        .animation(.spring(response: 0.2, dampingFraction: 0.7), value: currentWordIndex)
+                        .padding(.vertical, 1)
+                        .background(isCurrent ? Color.accentColor.opacity(0.14) : .clear, in: Capsule())
+                        .animation(.linear(duration: 0.05), value: currentWordIndex)
                         .id(token.id)
                     } else {
                         Text(token.text)
                             .font(.system(size: 18, weight: .regular, design: .rounded))
-                            .foregroundColor(color)
+                            .foregroundStyle(color)
                             .id(token.id)
                     }
                 }
@@ -2711,10 +3070,68 @@ struct JapaneseWordFlowContentView: View {
             .padding()
             .padding(.bottom, 40)
             .onChange(of: currentWordIndex) { _, newIndex in
-                if newIndex > 0 && !isUserScrolling {
-                    onScrollTo(newIndex)
-                }
+                guard newIndex > 0, !isUserScrolling,
+                      let sentenceStart = sentenceStartToken(for: newIndex),
+                      sentenceStart != lastAutoScrollSentenceStart else { return }
+                lastAutoScrollSentenceStart = sentenceStart
+                onScrollTo(sentenceStart)
             }
+    }
+}
+
+/// A single, non-wrapping Japanese token for the karaoke flow.  Ruby is held
+/// directly above its matching base text, so measuring it in a parent
+/// FlowLayout always returns its real width.
+private struct JapaneseKaraokeTokenView: View {
+    let token: String
+    let fontSize: CGFloat
+    let fontWeight: Font.Weight
+    let textColor: Color
+
+    private var rubyParts: (base: String, reading: String?) {
+        let normalized = token
+            .replacingOccurrences(of: "<ruby>", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "</ruby>", with: "", options: .caseInsensitive)
+            .replacingOccurrences(of: "<rt>", with: "(", options: .caseInsensitive)
+            .replacingOccurrences(of: "</rt>", with: ")", options: .caseInsensitive)
+
+        guard let open = normalized.firstIndex(where: { $0 == "(" || $0 == "（" }) else {
+            return (normalized, nil)
+        }
+        let closeCharacter: Character = normalized[open] == "（" ? "）" : ")"
+        guard let close = normalized[normalized.index(after: open)...].firstIndex(of: closeCharacter) else {
+            return (normalized, nil)
+        }
+
+        let basePrefix = String(normalized[..<open])
+        let reading = String(normalized[normalized.index(after: open)..<close])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        // A token can end in Japanese punctuation after the ruby annotation.
+        // Keep that suffix with its word so it cannot be stranded at a line start.
+        let suffixStart = normalized.index(after: close)
+        let base = basePrefix + String(normalized[suffixStart...])
+        return reading.isEmpty ? (base, nil) : (base, reading)
+    }
+
+    var body: some View {
+        let parts = rubyParts
+        let rubySize = max(10, fontSize * 0.5)
+        VStack(spacing: 0) {
+            Text(parts.reading ?? " ")
+                .font(.system(size: rubySize, weight: .regular, design: .rounded))
+                .foregroundStyle(textColor.opacity(0.82))
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+                .opacity(parts.reading == nil ? 0 : 1)
+                .frame(height: rubySize * 1.35)
+
+            Text(parts.base)
+                .font(.system(size: fontSize, weight: fontWeight, design: .rounded))
+                .foregroundStyle(textColor)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .frame(minWidth: max(fontSize * 1.05, CGFloat(parts.base.count) * fontSize * 0.92))
     }
 }
 
@@ -3267,9 +3684,19 @@ struct ParentalGateView: View {
                     .font(.system(size: 50))
                     .foregroundColor(.MagicBlue)
                 
-                Text(titleText)
-                    .font(.headline)
-                    .foregroundColor(.black)
+                if language == .japanese {
+                    FuriganaText(
+                        titleText,
+                        fontSize: 17,
+                        fontWeight: .bold,
+                        textColor: .black,
+                        lineSpacing: 4
+                    )
+                } else {
+                    Text(titleText)
+                        .font(.headline)
+                        .foregroundColor(.black)
+                }
                 
                 Text(questionText)
                     .font(.title2).bold()
@@ -3285,10 +3712,21 @@ struct ParentalGateView: View {
                     .foregroundColor(.black)
                 
                 if showError {
-                    Text(errorText)
-                        .foregroundColor(.red)
-                        .font(.caption)
+                    if language == .japanese {
+                        FuriganaText(
+                            errorText,
+                            fontSize: 12,
+                            fontWeight: .regular,
+                            textColor: .red,
+                            lineSpacing: 3
+                        )
                         .transition(.scale.combined(with: .opacity))
+                    } else {
+                        Text(errorText)
+                            .foregroundColor(.red)
+                            .font(.caption)
+                            .transition(.scale.combined(with: .opacity))
+                    }
                 }
                 
                 HStack {
@@ -3563,6 +4001,12 @@ struct ThinkingAnimationView: View {
         let localizedText = LocalizedStrings(language: language)
         let clampedProgress = min(max(progress, stage.progressFloor), 1.0)
         VStack(spacing: isPad ? 16 : 14) {
+            Image(systemName: "brain.head.profile")
+                .font(.system(size: isPad ? 38 : 34, weight: .semibold))
+                .foregroundStyle(Color.MagicBlue)
+                .symbolEffect(.pulse, options: .repeating, isActive: isAnimating)
+                .accessibilityHidden(true)
+
             HStack(spacing: 8) {
                 ForEach(0..<3) { index in
                     Circle()
@@ -3578,17 +4022,37 @@ struct ThinkingAnimationView: View {
             }
 
             VStack(spacing: 6) {
-                Text(localizedText.waitingTitle(for: stage))
-                    .font(.system(size: isPad ? 18 : 16, weight: .bold, design: .rounded))
-                    .foregroundColor(.DarkText)
+                if language == .japanese {
+                    FuriganaText(
+                        localizedText.waitingTitle(for: stage),
+                        fontSize: isPad ? 18 : 16,
+                        fontWeight: .bold,
+                        textColor: .DarkText,
+                        lineSpacing: 5
+                    )
                     .multilineTextAlignment(.center)
 
-                Text(localizedText.waitingSubtitle(for: stage))
-                    .font(.system(size: isPad ? 14 : 12, weight: .medium, design: .rounded))
-                    .foregroundColor(.gray.opacity(0.8))
+                    FuriganaText(
+                        localizedText.waitingSubtitle(for: stage),
+                        fontSize: isPad ? 14 : 12,
+                        fontWeight: .medium,
+                        textColor: .gray.opacity(0.8),
+                        lineSpacing: 4
+                    )
                     .multilineTextAlignment(.center)
-                    .lineLimit(2)
-                    .minimumScaleFactor(0.85)
+                } else {
+                    Text(localizedText.waitingTitle(for: stage))
+                        .font(.system(size: isPad ? 18 : 16, weight: .bold, design: .rounded))
+                        .foregroundColor(.DarkText)
+                        .multilineTextAlignment(.center)
+
+                    Text(localizedText.waitingSubtitle(for: stage))
+                        .font(.system(size: isPad ? 14 : 12, weight: .medium, design: .rounded))
+                        .foregroundColor(.gray.opacity(0.8))
+                        .multilineTextAlignment(.center)
+                        .lineLimit(2)
+                        .minimumScaleFactor(0.85)
+                }
             }
 
             GeometryReader { geo in
@@ -3617,109 +4081,81 @@ struct LanguageButton: View {
     let action: () -> Void
     var body: some View {
         Button(action: action) {
-            Text(title).font(.system(size: 16, weight: .bold, design: .rounded)).padding(.vertical, 8).padding(.horizontal, 16).foregroundColor(isSelected ? .white : Color.gray.opacity(0.8)).background(isSelected ? Color.MagicBlue : Color.clear).cornerRadius(20)
+            Text(title).font(.body.weight(.semibold)).frame(minWidth: 44, minHeight: 44).foregroundStyle(isSelected ? .white : .secondary).background(isSelected ? Color.accentColor : .clear, in: Capsule())
         }
+        .buttonStyle(.plain).accessibilityLabel(title).accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct DictationCard: View {
+    let transcript: String
+    let language: AppLanguage
+    let isPreparing: Bool
+    let isPad: Bool
+    @State private var isAnimating = false
+    @ScaledMetric(relativeTo: .body) private var textScale: CGFloat = 1
+
+    private var title: String {
+        switch language { case .chinese: return isPreparing ? "正在準備聽你說" : "我正在聽你說"; case .english: return isPreparing ? "Getting ready to listen" : "I’m listening"; case .japanese: return isPreparing ? "聞(き)く準備(じゅんび)をしているよ" : "お話(はなし)を聞(き)いているよ" }
+    }
+    private var placeholder: String {
+        switch language { case .chinese: return "說出你想知道的事…"; case .english: return "Tell me what you’d like to know…"; case .japanese: return "知(し)りたいことを話(はな)してね…" }
+    }
+    var body: some View {
+        VStack(spacing: isPad ? 22 : 18) {
+            Image(systemName: "waveform").font(.system(size: isPad ? 34 : 30, weight: .semibold)).foregroundStyle(isPreparing ? Color.secondary : Color.red)
+                .symbolEffect(.variableColor.iterative, options: .repeating, isActive: isAnimating && !isPreparing)
+            if language == .japanese {
+                FuriganaText(
+                    title,
+                    fontSize: (isPad ? 22 : 19) * textScale,
+                    fontWeight: .bold,
+                    textColor: .primary,
+                    lineSpacing: isPad ? 7 : 6
+                )
+                .multilineTextAlignment(.center)
+
+                if transcript == "..." || transcript.isEmpty {
+                    FuriganaText(
+                        placeholder,
+                        fontSize: (isPad ? 34 : 28) * textScale,
+                        fontWeight: .bold,
+                        textColor: isPreparing ? .secondary : .primary,
+                        lineSpacing: isPad ? 12 : 10
+                    )
+                    .multilineTextAlignment(.center)
+                } else {
+                    Text(transcript)
+                        .font(.system(size: (isPad ? 34 : 28) * textScale, weight: .bold, design: .rounded))
+                        .foregroundStyle(isPreparing ? .secondary : .primary)
+                        .multilineTextAlignment(.center)
+                        .lineSpacing(isPad ? 12 : 10)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            } else {
+                Text(title).font(.system(size: (isPad ? 22 : 19) * textScale, weight: .bold, design: .rounded))
+                Text(transcript == "..." || transcript.isEmpty ? placeholder : transcript)
+                    .font(.system(size: (isPad ? 34 : 28) * textScale, weight: .bold, design: .rounded))
+                    .foregroundStyle(isPreparing ? .secondary : .primary).multilineTextAlignment(.center).lineSpacing(isPad ? 12 : 10).fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .frame(maxWidth: .infinity).padding(isPad ? 34 : 26)
+        .background(Color.accentColor.opacity(isPreparing ? 0.06 : 0.10), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay { RoundedRectangle(cornerRadius: 24, style: .continuous).strokeBorder(Color.accentColor.opacity(0.16)) }
+        .onAppear { isAnimating = true }
     }
 }
 
 extension Color {
-    static let CreamWhite = Color(red: 1.0, green: 0.99, blue: 0.96)
-    static let SoftBlue = Color(red: 0.92, green: 0.96, blue: 1.0)
-    static let MagicBlue = Color(red: 0.3, green: 0.5, blue: 0.9)
-    static let ButtonOrange = Color(red: 1.0, green: 0.6, blue: 0.0)
-    static let ButtonRed = Color(red: 1.0, green: 0.3, blue: 0.3)
-    static let DarkText = Color(red: 0.2, green: 0.2, blue: 0.3)
+    static let CreamWhite = Color(uiColor: .systemBackground)
+    static let SoftBlue = Color(uiColor: .secondarySystemBackground)
+    static let MagicBlue = Color.accentColor
+    static let ButtonOrange = Color(uiColor: .systemOrange)
+    static let ButtonRed = Color(uiColor: .systemRed)
+    static let DarkText = Color.primary
 }
 
 extension String {
-    func limitedForSpokenResponse(language: AppLanguage, answerDepth: AIAnswerDepth = .standard) -> String {
-        let maxSpokenCharacters = answerDepth.spokenCharacterLimit(language: language)
-        let trimmed = trimmingCharacters(in: .whitespacesAndNewlines)
-        guard trimmed.estimatedTTSCharacterCount(language: language) > maxSpokenCharacters else {
-            return trimmed
-        }
-
-        let sentences = trimmed.splitIntoSpeechSentences()
-        var selected: [String] = []
-
-        for sentence in sentences {
-            let candidate = (selected + [sentence]).joined(separator: "\n\n")
-            if candidate.estimatedTTSCharacterCount(language: language) <= maxSpokenCharacters {
-                selected.append(sentence)
-            } else {
-                break
-            }
-        }
-
-        if !selected.isEmpty {
-            print("✂️ TTS 文字過長，已縮短到 \(selected.joined(separator: "\n\n").estimatedTTSCharacterCount(language: language)) 字")
-            return selected.joined(separator: "\n\n")
-        }
-
-        var fallback = ""
-        for character in trimmed {
-            let candidate = fallback + String(character)
-            guard candidate.estimatedTTSCharacterCount(language: language) <= maxSpokenCharacters else { break }
-            fallback = candidate
-        }
-
-        let result = fallback.trimmingCharacters(in: .whitespacesAndNewlines)
-        print("✂️ TTS 文字過長，已截短到 \(result.estimatedTTSCharacterCount(language: language)) 字")
-        return result.isEmpty ? trimmed : result
-    }
-
-    private func estimatedTTSCharacterCount(language: AppLanguage) -> Int {
-        var text = self
-        text = text.replacingOccurrences(of: "**", with: "")
-        text = text.replacingOccurrences(of: "#", with: "")
-        text = text.replacingOccurrences(of: "`", with: "")
-
-        if language == .japanese {
-            if let rubyRegex = try? NSRegularExpression(pattern: "<ruby>(.*?)<rt>.*?</rt></ruby>", options: [.dotMatchesLineSeparators, .caseInsensitive]) {
-                let range = NSRange(text.startIndex..., in: text)
-                text = rubyRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
-            }
-            if let parentheticalKanaRegex = try? NSRegularExpression(pattern: "[\\(（][ぁ-んァ-ヴー]+[\\)）]", options: []) {
-                let range = NSRange(text.startIndex..., in: text)
-                text = parentheticalKanaRegex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
-            }
-            text = text.replacingOccurrences(of: "<ruby>", with: "")
-            text = text.replacingOccurrences(of: "</ruby>", with: "")
-            text = text.replacingOccurrences(of: "<rt>", with: "")
-            text = text.replacingOccurrences(of: "</rt>", with: "")
-        }
-
-        text = text.unicodeScalars
-            .filter { !($0.properties.isEmoji && $0.properties.isEmojiPresentation) }
-            .map { String($0) }
-            .joined()
-        return text.filter { !$0.isWhitespace }.count
-    }
-
-    private func splitIntoSpeechSentences() -> [String] {
-        var sentences: [String] = []
-        var current = ""
-        let terminators = Set<Character>(["。", "！", "？", ".", "!", "?"])
-
-        for character in self {
-            current.append(character)
-            if terminators.contains(character) {
-                let sentence = current.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !sentence.isEmpty {
-                    sentences.append(sentence)
-                }
-                current = ""
-            }
-        }
-
-        let tail = current.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !tail.isEmpty {
-            sentences.append(tail)
-        }
-
-        return sentences
-    }
-
     func toBopomofoCharacter() -> [(char: String, bopomofo: String)] {
         var result: [(String, String)] = []
         for char in self {
@@ -3748,8 +4184,14 @@ extension String {
         text = text.replacingOccurrences(of: "#", with: "")
         text = text.replacingOccurrences(of: "`", with: "")
         
-        // 🇯🇵 日文專用處理：移除振假名括號，避免奇怪發音
+        // 🇯🇵 日文專用處理：畫面保留振假名，語音則直接使用振假名。
+        // 這使音檔的實際音節與卡拉 OK 的讀音資料完全一致。
         if language == .japanese {
+            // The visible answer and the spoken text must share the same
+            // Japanese sentence boundaries. This also protects the karaoke
+            // mapper from half-width punctuation returned by a provider.
+            text = text.normalizedJapaneseDisplayTypography()
+
             // 1. 移除 Emoji（但保留日文字符）
             var cleanedText = ""
             for scalar in text.unicodeScalars {
@@ -3774,15 +4216,17 @@ extension String {
             text = text.replacingOccurrences(of: "<rt>", with: "")
             text = text.replacingOccurrences(of: "</rt>", with: "")
             
-            // 2. 移除振假名括號內容（保留括號外的文字）
-            // 例如：動物(どうぶつ) → 動物
-            // 例如：最初(さいしょ) → 最初
+            // 2. 將 漢字(かんじ) 改成 かんじ 送進 TTS。以前刪除括號
+            //    內容後交給語音引擎猜讀音，字幕則用假名估時，長文後段
+            //    必然會產生累積誤差而跳字。
             do {
-                // 匹配括號和裡面的平假名、片假名
-                let regex = try NSRegularExpression(pattern: "[\\(（][ぁ-んァ-ヴー]+[\\)）]", options: [])
+                let regex = try NSRegularExpression(
+                    pattern: "[一-龯々〆ヶ]+[\\(（]([ぁ-んァ-ヴー]+)[\\)）]",
+                    options: []
+                )
                 let range = NSRange(text.startIndex..., in: text)
-                text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "")
-                print("🇯🇵 移除振假名括號後：\(text)")
+                text = regex.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+                print("🇯🇵 使用振假名朗讀：\(text)")
             } catch {
                 print("❌ 正則表達式錯誤：\(error)")
             }
@@ -3862,6 +4306,62 @@ extension String {
         }
 
         return text.collapsingRepeatedSpaces()
+    }
+
+    /// Canonical Japanese typography for both the answer card and TTS input.
+    /// Japanese has no spaces before a closing punctuation mark. Normalising
+    /// these marks here ensures visual sentence splitting and audio timing use
+    /// exactly the same boundaries, even if an upstream response used ASCII.
+    func normalizedJapaneseDisplayTypography() -> String {
+        var text = self
+            .replacingOccurrences(of: "\r\n", with: "\n")
+            .replacingOccurrences(of: "\r", with: "\n")
+            .replacingOccurrences(of: "，", with: "、")
+            .replacingOccurrences(of: "．", with: "。")
+
+        var normalized = ""
+        let characters = Array(text)
+        for (index, character) in characters.enumerated() {
+            let previous = index > 0 ? characters[index - 1] : nil
+            let next = index + 1 < characters.count ? characters[index + 1] : nil
+            let isDecimalPoint = character == "." && previous?.isNumber == true && next?.isNumber == true
+            let isDecimalComma = character == "," && previous?.isNumber == true && next?.isNumber == true
+
+            switch character {
+            case "," where !isDecimalComma:
+                normalized.append("、")
+            case "." where !isDecimalPoint:
+                normalized.append("。")
+            case "!":
+                normalized.append("！")
+            case "?":
+                normalized.append("？")
+            default:
+                normalized.append(character)
+            }
+        }
+        text = normalized
+
+        if let beforeClosing = try? NSRegularExpression(pattern: "[ \\t]+([、】【、】【！？])", options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = beforeClosing.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+        }
+        if let afterOpening = try? NSRegularExpression(pattern: "([「『（])\\s+", options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = afterOpening.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+        }
+        if let afterPunctuation = try? NSRegularExpression(pattern: "([、】【、】【！？])[ \\t]+", options: []) {
+            let range = NSRange(text.startIndex..., in: text)
+            text = afterPunctuation.stringByReplacingMatches(in: text, options: [], range: range, withTemplate: "$1")
+        }
+
+        let duplicates = [("、、", "、"), ("。。", "。"), ("！！", "！"), ("？？", "？"), ("、。", "。")]
+        for (duplicate, replacement) in duplicates {
+            while text.contains(duplicate) {
+                text = text.replacingOccurrences(of: duplicate, with: replacement)
+            }
+        }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func normalizedTaiwanMandarinDigitsForTTS() -> String {

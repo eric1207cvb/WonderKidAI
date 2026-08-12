@@ -161,7 +161,7 @@ final class PremiumCloudSyncManager {
 
         if let clearedAt = payload.clearedAt {
             let localClearedAt = loadHistoryClearedAt()
-            if localClearedAt == nil || clearedAt > localClearedAt! {
+            if localClearedAt.map({ clearedAt > $0 }) ?? true {
                 saveHistoryClearedAt(clearedAt)
             }
         }
