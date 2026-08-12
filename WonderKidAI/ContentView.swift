@@ -467,7 +467,11 @@ struct ContentView: View {
     func topNavigationBar(geometry: GeometryProxy, isPad: Bool) -> some View {
         let iconSize: CGFloat = isPad ? 18 : 16
         let capsulePadding: CGFloat = isPad ? 12 : 10
-        let showsSideLabels = geometry.size.width > 380 && !usesAccessibilityText
+        // A 6.3-inch iPhone cannot safely fit History, the three-language
+        // picker, and the longer Japanese membership title side by side.
+        // Keep side controls icon-only until there is enough real width;
+        // their 44pt hit targets remain unchanged.
+        let showsSideLabels = (isPad || geometry.size.width >= 430) && !usesAccessibilityText
 
         VStack(spacing: isPad ? 14 : 12) {
             ZStack {
